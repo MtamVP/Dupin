@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+backend/.pytest_cache/
+backend/data/*
+!backend/data/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Desktop (Tauri v2 Rust build artifacts)
+desktop/src-tauri/target/
+Stalker++.exe
+Dupin.exe
+WebView2Loader.dll
+
+# Environment & IDE
+.env
+.env.local
+.DS_Store
+Thumbs.db

@@ -1,0 +1,571 @@
+{
+  "schema_version": "maigret-compat-2.0",
+  "description": "Declarative public OSINT site & engine registry inspired by soxoj/maigret and sherlock-project/sherlock (5 reusable engines, 55 platforms, rank priority, response_url Soft-404 checks). Drop custom Maigret/Sherlock JSON into backend/data/custom_sites.json to extend coverage dynamically.",
+  "engines": {
+    "DiscourseJson": {
+      "probe_suffix": "/u/{username}.json",
+      "profile_suffix": "/u/{username}",
+      "mode": "discourse_json"
+    },
+    "WordpressAuthor": {
+      "probe_suffix": "/wp-json/wp/v2/users?slug={username}",
+      "profile_suffix": "/author/{username}/",
+      "mode": "wordpress_json"
+    },
+    "MastodonApi": {
+      "probe_suffix": "/api/v1/accounts/lookup?acct={username}",
+      "profile_suffix": "/@{username}",
+      "mode": "mastodon_json"
+    },
+    "GiteaApi": {
+      "probe_suffix": "/api/v1/users/{username}",
+      "profile_suffix": "/{username}",
+      "mode": "gitea_json"
+    },
+    "BlueskyApi": {
+      "probe_suffix": "/xrpc/app.bsky.actor.getProfile?actor={username}.bsky.social",
+      "profile_suffix": "/profile/{username}.bsky.social",
+      "mode": "bluesky_json"
+    }
+  },
+  "sites": [
+    {
+      "site": "GitHub",
+      "category": "coding",
+      "tags": ["coding", "global", "tech"],
+      "url": "https://github.com/{u}",
+      "api_url": "https://api.github.com/users/{u}",
+      "mode": "github_json",
+      "regex_check": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+    },
+    {
+      "site": "GitLab",
+      "category": "coding",
+      "tags": ["coding", "global", "tech"],
+      "url": "https://gitlab.com/{u}",
+      "api_url": "https://gitlab.com/api/v4/users?username={u}",
+      "mode": "gitlab_json",
+      "regex_check": "^[A-Za-z0-9_.-]{2,40}$"
+    },
+    {
+      "site": "Dev.to",
+      "category": "coding",
+      "tags": ["coding", "blog", "global"],
+      "url": "https://dev.to/{u}",
+      "api_url": "https://dev.to/api/users/by_username?url={u}",
+      "mode": "devto_json",
+      "regex_check": "^[A-Za-z0-9_]{2,30}$"
+    },
+    {
+      "site": "Reddit",
+      "category": "community",
+      "tags": ["social", "forum", "global"],
+      "url": "https://www.reddit.com/user/{u}",
+      "api_url": "https://www.reddit.com/user/{u}/about.json",
+      "mode": "reddit_json",
+      "regex_check": "^[A-Za-z0-9_-]{3,20}$"
+    },
+    {
+      "site": "HackerNews",
+      "category": "coding",
+      "tags": ["coding", "tech", "forum", "global"],
+      "url": "https://news.ycombinator.com/user?id={u}",
+      "api_url": "https://hacker-news.firebaseio.com/v0/user/{u}.json",
+      "mode": "hn_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,25}$"
+    },
+    {
+      "site": "HuggingFace",
+      "category": "ai_ml",
+      "tags": ["ai_ml", "coding", "academic", "global"],
+      "url": "https://huggingface.co/{u}",
+      "api_url": "https://huggingface.co/api/users/{u}/overview",
+      "mode": "hf_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,40}$"
+    },
+    {
+      "site": "Keybase",
+      "category": "crypto_identity",
+      "tags": ["security", "crypto", "global"],
+      "url": "https://keybase.io/{u}",
+      "api_url": "https://keybase.io/_/api/1.0/user/lookup.json?usernames={u}",
+      "mode": "keybase_json",
+      "regex_check": "^[A-Za-z0-9_]{2,16}$"
+    },
+    {
+      "site": "Codeforces",
+      "category": "competitive_programming",
+      "tags": ["coding", "student", "vn", "global"],
+      "url": "https://codeforces.com/profile/{u}",
+      "api_url": "https://codeforces.com/api/user.info?handles={u}",
+      "mode": "codeforces_json",
+      "regex_check": "^[A-Za-z0-9_.-]{3,24}$"
+    },
+    {
+      "site": "DockerHub",
+      "category": "coding",
+      "tags": ["coding", "devops", "global"],
+      "url": "https://hub.docker.com/u/{u}",
+      "api_url": "https://hub.docker.com/v2/users/{u}/",
+      "mode": "docker_json",
+      "regex_check": "^[a-z0-9]{4,30}$"
+    },
+    {
+      "site": "Mastodon.social",
+      "category": "social",
+      "tags": ["social", "fediverse", "global"],
+      "engine": "MastodonApi",
+      "base_url": "https://mastodon.social",
+      "regex_check": "^[A-Za-z0-9_]{2,30}$"
+    },
+    {
+      "site": "Infosec.exchange",
+      "category": "security",
+      "tags": ["security", "fediverse", "global"],
+      "engine": "MastodonApi",
+      "base_url": "https://infosec.exchange",
+      "regex_check": "^[A-Za-z0-9_]{2,30}$"
+    },
+    {
+      "site": "UIT Forum (Discourse)",
+      "category": "academic_forum",
+      "tags": ["vn", "student", "forum", "coding"],
+      "engine": "DiscourseJson",
+      "base_url": "https://forum.uit.edu.vn",
+      "regex_check": "^[A-Za-z0-9_.-]{2,30}$"
+    },
+    {
+      "site": "PyPI",
+      "category": "coding",
+      "tags": ["coding", "python", "global"],
+      "url": "https://pypi.org/user/{u}/",
+      "mode": "html_check",
+      "presence_strs": ["profile", "projects"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,40}$"
+    },
+    {
+      "site": "npm",
+      "category": "coding",
+      "tags": ["coding", "javascript", "global"],
+      "url": "https://www.npmjs.com/~{u}",
+      "mode": "html_check",
+      "presence_strs": ["packages"],
+      "absence_strs": ["not found", "cannot find"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,40}$"
+    },
+    {
+      "site": "Medium",
+      "category": "publishing",
+      "tags": ["blog", "social", "global"],
+      "url": "https://medium.com/@{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["page not found", "404", "out of nothing, something"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,30}$"
+    },
+    {
+      "site": "Kaggle",
+      "category": "ai_ml",
+      "tags": ["ai_ml", "coding", "student", "vn", "global"],
+      "url": "https://www.kaggle.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["kaggle"],
+      "absence_strs": ["we can't find that page", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,40}$"
+    },
+    {
+      "site": "Linktree",
+      "category": "social_hub",
+      "tags": ["social", "vn", "global"],
+      "url": "https://linktr.ee/{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["the page you’re looking for doesn’t exist", "page not found"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,30}$"
+    },
+    {
+      "site": "LeetCode",
+      "category": "coding",
+      "tags": ["coding", "student", "vn", "global"],
+      "url": "https://leetcode.com/u/{u}/",
+      "mode": "html_check",
+      "presence_strs": ["leetcode"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "AtCoder",
+      "category": "competitive_programming",
+      "tags": ["coding", "student", "asia", "global"],
+      "url": "https://atcoder.jp/users/{u}",
+      "mode": "html_check",
+      "presence_strs": ["rating", "atcoder"],
+      "absence_strs": ["404 not found"],
+      "regex_check": "^[A-Za-z0-9_]{3,16}$"
+    },
+    {
+      "site": "Behance",
+      "category": "design",
+      "tags": ["design", "portfolio", "vn", "global"],
+      "url": "https://www.behance.net/{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["oops! we can’t find that page", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "Dribbble",
+      "category": "design",
+      "tags": ["design", "portfolio", "global"],
+      "url": "https://dribbble.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["whoops, that page is gone", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "Viblo",
+      "category": "coding",
+      "tags": ["vn", "coding", "blog", "tech"],
+      "url": "https://viblo.asia/u/{u}",
+      "mode": "html_check",
+      "presence_strs": ["viblo"],
+      "absence_strs": ["404", "page not found", "không tìm thấy"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,35}$"
+    },
+    {
+      "site": "Spiderum",
+      "category": "publishing",
+      "tags": ["vn", "blog", "social"],
+      "url": "https://spiderum.com/nguoi-dung/{u}",
+      "mode": "html_check",
+      "presence_strs": ["spiderum"],
+      "absence_strs": ["404", "không tìm thấy"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,35}$"
+    },
+    {
+      "site": "Substack",
+      "category": "publishing",
+      "tags": ["blog", "journalism", "global"],
+      "url": "https://substack.com/@{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "SlideShare",
+      "category": "academic",
+      "tags": ["academic", "slides", "global"],
+      "url": "https://www.slideshare.net/{u}",
+      "mode": "html_check",
+      "presence_strs": ["slideshare"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "SpeakerDeck",
+      "category": "academic",
+      "tags": ["tech", "slides", "global"],
+      "url": "https://speakerdeck.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["speaker deck"],
+      "absence_strs": ["404", "not found"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "Replit",
+      "category": "coding",
+      "tags": ["coding", "student", "global"],
+      "url": "https://replit.com/@{u}",
+      "mode": "html_check",
+      "presence_strs": ["replit"],
+      "absence_strs": ["404", "not found"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "CodePen",
+      "category": "coding",
+      "tags": ["coding", "design", "global"],
+      "url": "https://codepen.io/{u}",
+      "mode": "html_check",
+      "presence_strs": ["codepen"],
+      "absence_strs": ["404", "page not found"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "Bitbucket",
+      "category": "coding",
+      "tags": ["coding", "global"],
+      "url": "https://bitbucket.org/{u}/",
+      "mode": "html_check",
+      "presence_strs": ["bitbucket"],
+      "absence_strs": ["404", "resource not found"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "SourceForge",
+      "category": "coding",
+      "tags": ["coding", "global"],
+      "url": "https://sourceforge.net/u/{u}/profile",
+      "mode": "html_check",
+      "presence_strs": ["sourceforge"],
+      "absence_strs": ["whoops", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,30}$"
+    },
+    {
+      "site": "Gravatar",
+      "category": "social_hub",
+      "tags": ["social", "identity", "global"],
+      "url": "https://gravatar.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["gravatar"],
+      "absence_strs": ["profile not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,35}$"
+    },
+    {
+      "site": "About.me",
+      "category": "social_hub",
+      "tags": ["social", "portfolio", "global"],
+      "url": "https://about.me/{u}",
+      "mode": "html_check",
+      "presence_strs": ["og:title"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_.-]{3,30}$"
+    },
+    {
+      "site": "Vimeo",
+      "category": "media",
+      "tags": ["media", "creative", "global"],
+      "url": "https://vimeo.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["vimeo"],
+      "absence_strs": ["sorry, we couldn’t find that page", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,32}$"
+    },
+    {
+      "site": "SoundCloud",
+      "category": "media",
+      "tags": ["music", "social", "global"],
+      "url": "https://soundcloud.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["soundcloud"],
+      "absence_strs": ["we can’t find that user", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,30}$"
+    },
+    {
+      "site": "Flickr",
+      "category": "media",
+      "tags": ["photo", "global"],
+      "url": "https://www.flickr.com/people/{u}/",
+      "mode": "html_check",
+      "presence_strs": ["flickr"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_@.-]{3,35}$"
+    },
+    {
+      "site": "Chess.com",
+      "category": "gaming",
+      "tags": ["gaming", "global"],
+      "url": "https://www.chess.com/member/{u}",
+      "api_url": "https://api.chess.com/pub/player/{u}",
+      "mode": "chess_json",
+      "regex_check": "^[A-Za-z0-9_-]{3,25}$"
+    },
+    {
+      "site": "Lichess",
+      "category": "gaming",
+      "tags": ["gaming", "global"],
+      "url": "https://lichess.org/@/{u}",
+      "api_url": "https://lichess.org/api/user/{u}",
+      "mode": "lichess_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,20}$"
+    },
+    {
+      "site": "TryHackMe",
+      "category": "security",
+      "tags": ["security", "coding", "student", "global"],
+      "url": "https://tryhackme.com/p/{u}",
+      "mode": "html_check",
+      "presence_strs": ["tryhackme"],
+      "absence_strs": ["404", "user not found"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,30}$"
+    },
+    {
+      "site": "HackerOne",
+      "category": "security",
+      "tags": ["security", "coding", "global"],
+      "url": "https://hackerone.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["hackerone"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "Bugcrowd",
+      "category": "security",
+      "tags": ["security", "coding", "global"],
+      "url": "https://bugcrowd.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["bugcrowd"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,30}$"
+    },
+    {
+      "site": "ProductHunt",
+      "category": "tech",
+      "tags": ["tech", "startup", "global"],
+      "url": "https://www.producthunt.com/@{u}",
+      "mode": "html_check",
+      "presence_strs": ["product hunt"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_]{2,30}$"
+    },
+    {
+      "site": "Patreon",
+      "category": "creator",
+      "tags": ["creator", "social", "global"],
+      "url": "https://www.patreon.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["patreon"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$"
+    },
+    {
+      "site": "BuyMeACoffee",
+      "category": "creator",
+      "tags": ["creator", "social", "global"],
+      "url": "https://www.buymeacoffee.com/{u}",
+      "mode": "html_check",
+      "presence_strs": ["buy me a coffee"],
+      "absence_strs": ["404", "page not found"],
+      "regex_check": "^[A-Za-z0-9_.-]{2,35}$"
+    },
+    {
+      "site": "Telegram Public",
+      "category": "social",
+      "tags": ["social", "vn", "global"],
+      "url": "https://t.me/{u}",
+      "mode": "html_check",
+      "presence_strs": ["tgme_page_title"],
+      "absence_strs": ["if you have telegram, you can contact @", "tgme_page_icon_user"],
+      "regex_check": "^[A-Za-z0-9_]{5,32}$"
+    },
+    {
+      "site": "ResearchGate",
+      "category": "academic",
+      "tags": ["academic", "global"],
+      "url": "https://www.researchgate.net/profile/{u}",
+      "mode": "html_check",
+      "presence_strs": ["researchgate"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[A-Za-z0-9_-]{3,45}$",
+      "rank": 42
+    },
+    {
+      "site": "Bluesky",
+      "category": "social",
+      "tags": ["social", "tech", "global"],
+      "url": "https://bsky.app/profile/{u}.bsky.social",
+      "api_url": "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={u}.bsky.social",
+      "mode": "bluesky_json",
+      "regex_check": "^[A-Za-z0-9-]{3,32}$",
+      "rank": 10
+    },
+    {
+      "site": "Codeberg",
+      "category": "coding",
+      "tags": ["coding", "opensource", "global"],
+      "engine": "GiteaApi",
+      "base_url": "https://codeberg.org",
+      "regex_check": "^[A-Za-z0-9_.-]{2,35}$",
+      "rank": 22
+    },
+    {
+      "site": "Crates.io",
+      "category": "coding",
+      "tags": ["coding", "rust", "global"],
+      "url": "https://crates.io/users/{u}",
+      "api_url": "https://crates.io/api/v1/users/{u}",
+      "mode": "crates_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,39}$",
+      "rank": 28
+    },
+    {
+      "site": "RubyGems",
+      "category": "coding",
+      "tags": ["coding", "ruby", "global"],
+      "url": "https://rubygems.org/profiles/{u}",
+      "api_url": "https://rubygems.org/api/v1/profiles/{u}.json",
+      "mode": "rubygems_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,35}$",
+      "rank": 35
+    },
+    {
+      "site": "Lobsters",
+      "category": "coding",
+      "tags": ["coding", "tech", "forum", "global"],
+      "url": "https://lobste.rs/~{u}",
+      "api_url": "https://lobste.rs/u/{u}.json",
+      "mode": "lobsters_json",
+      "regex_check": "^[A-Za-z0-9_-]{2,25}$",
+      "rank": 30
+    },
+    {
+      "site": "Launchpad",
+      "category": "coding",
+      "tags": ["coding", "linux", "global"],
+      "url": "https://launchpad.net/~{u}",
+      "mode": "html_check",
+      "presence_strs": ["launchpad"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[a-z0-9+.-]{2,35}$",
+      "rank": 46
+    },
+    {
+      "site": "InternetArchive",
+      "category": "publishing",
+      "tags": ["academic", "archive", "global"],
+      "url": "https://archive.org/details/@{u}",
+      "mode": "html_check",
+      "presence_strs": ["archive.org"],
+      "absence_strs": ["cannot find account", "item cannot be found", "404"],
+      "regex_check": "^[A-Za-z0-9_.-]{3,35}$",
+      "rank": 44
+    },
+    {
+      "site": "OSF",
+      "category": "academic",
+      "tags": ["academic", "research", "global"],
+      "url": "https://osf.io/{u}/",
+      "mode": "html_check",
+      "presence_strs": ["osf"],
+      "absence_strs": ["page not found", "404", "not found"],
+      "regex_check": "^[A-Za-z0-9]{5,12}$",
+      "rank": 48
+    },
+    {
+      "site": "StackOverflow",
+      "category": "coding",
+      "tags": ["coding", "tech", "global"],
+      "url": "https://stackoverflow.com/users/{u}",
+      "mode": "html_check",
+      "presence_strs": ["stackoverflow", "reputation"],
+      "absence_strs": ["page not found", "404"],
+      "regex_check": "^[0-9]{2,12}$",
+      "rank": 50
+    },
+    {
+      "site": "Wikimedia",
+      "category": "academic",
+      "tags": ["academic", "wiki", "global"],
+      "url": "https://en.wikipedia.org/wiki/User:{u}",
+      "mode": "html_check",
+      "presence_strs": ["wikipedia"],
+      "absence_strs": ["wikipedia does not have a user page with this exact name", "user account", "is not registered"],
+      "regex_check": "^[A-Za-z0-9_.-]{3,40}$",
+      "rank": 40
+    }
+  ]
+}

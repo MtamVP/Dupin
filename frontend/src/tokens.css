@@ -1,0 +1,125 @@
+/* DESIGN.md Design Tokens — Single source of truth for Stalker++ UI.
+ * All components and stylesheets MUST reference these CSS variables (no hard-coded hex values).
+ */
+
+:root {
+  color-scheme: light;
+  /* Colors — Brand & Accent (Cursor Orange reserved ONLY for primary CTA & logo) */
+  --color-primary: #f54e00;
+  --color-primary-active: #d04200;
+  --color-on-primary: #ffffff;
+
+  /* Colors — Text */
+  --color-ink: #26251e;
+  --color-body: #5a5852;
+  --color-body-strong: #26251e;
+  --color-muted: #807d72;
+  --color-muted-soft: #a09c92;
+
+  /* Colors — Hairlines */
+  --color-hairline: #e6e5e0;
+  --color-hairline-soft: #efeee8;
+  --color-hairline-strong: #cfcdc4;
+
+  /* Colors — Surfaces */
+  --color-canvas: #f7f7f4;
+  --color-canvas-soft: #fafaf7;
+  --color-surface-card: #ffffff;
+  --color-surface-strong: #e6e5e0;
+
+  /* Colors — Pipeline Timeline Pastels (ONLY for pipeline progress pills) */
+  --color-timeline-thinking: #dfa88f;
+  --color-timeline-grep: #9fc9a2;
+  --color-timeline-read: #9fbbe0;
+  --color-timeline-edit: #c0a8dd;
+  --color-timeline-done: #c08532;
+  --color-on-pastel: #26251e;
+
+  /* Colors — Semantic */
+  --color-semantic-error: #cf2d56;
+  --color-semantic-success: #1f8a65;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-display-lg: 36px;
+  --text-display-md: 26px;
+  --text-display-sm: 22px;
+  --text-title-md: 18px;
+  --text-title-sm: 16px;
+  --text-body-md: 16px;
+  --text-body-sm: 14px;
+  --text-caption: 13px;
+  --text-caption-upper: 11px;
+  --text-code: 13px;
+
+  --tracking-display: -0.015em;
+  --tracking-caption-upper: 0.88px;
+
+  /* Border Radius */
+  --radius-none: 0px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 9999px;
+
+  /* Spacing */
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-base: 16px;
+  --space-md: 20px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+
+  /* Overlay backdrop (for modals without drop shadows) */
+  --color-backdrop: rgba(38, 37, 30, 0.32);
+
+  /* Semantic aliases for legacy/shared component references */
+  --bg: var(--color-canvas);
+  --bg-sidebar: var(--color-canvas);
+  --bg-card: var(--color-surface-card);
+  --bg-subtle: var(--color-canvas-soft);
+  --bg-hover: var(--color-surface-strong);
+  --border: var(--color-hairline);
+  --border-strong: var(--color-hairline-strong);
+  --ink: var(--color-ink);
+  --ink-secondary: var(--color-body);
+  --ink-muted: var(--color-muted);
+  --accent: var(--color-ink);
+  --accent-hover: var(--color-body-strong);
+  --accent-soft: var(--color-surface-strong);
+  --ok: var(--color-semantic-success);
+  --ok-soft: var(--color-canvas-soft);
+  --warn: var(--color-timeline-done);
+  --warn-soft: var(--color-canvas-soft);
+  --neg: var(--color-semantic-error);
+  --neg-soft: var(--color-canvas-soft);
+}
+
+/* Warm Editorial Dark Mode — preserves DESIGN.md hairline-only depth, warm charcoal tones, zero shadows */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-ink: #f3f2ec;
+  --color-body: #c4c1b6;
+  --color-body-strong: #f3f2ec;
+  --color-muted: #8f8c80;
+  --color-muted-soft: #68665c;
+
+  --color-hairline: #2d2c26;
+  --color-hairline-soft: #25241f;
+  --color-hairline-strong: #3e3c34;
+
+  --color-canvas: #161613;
+  --color-canvas-soft: #1c1b17;
+  --color-surface-card: #201f1b;
+  --color-surface-strong: #2c2b25;
+
+  --color-semantic-error: #e55376;
+  --color-semantic-success: #3cb388;
+  --color-backdrop: rgba(10, 10, 8, 0.62);
+}

@@ -1,0 +1,41 @@
+# Stalker++ — Curated Full Technical Reference (`llms-full.txt`)
+
+## Overview
+Stalker++ is a local-first Multi-Agent OSINT & 8-Dimensional Entity Resolution Knowledge Graph Workbench.
+It solves the core limitations of traditional GitHub OSINT scripts (Sherlock, Maigret, SpiderFoot, Recon-ng) by combining:
+1. **8-Dimensional Feature Ontology** (`identity`, `spatiotemporal`, `education_career`, `interests_skills`, `stylometry_behavior`, `technical_artifact`, `relational`, `negative_constraint`).
+2. **Bayesian Log-Odds Belief Updating** with anti-echo-chamber domain diversity damping (`1 / sqrt(k)`).
+3. **Vietnamese NLP & Phonetic Normalization**: Diacritic stripping, abbreviation expansion (`HCMUT`, `ĐHBK`, `TPHCM`, `HN`), Jaro-Winkler, and regional phonetic equivalence (`i/y`, `tr/ch`, `s/x`, `gi/r/d`).
+4. **Behavioral & Stylometric Fingerprinting**: Handle anatomy (`minhtuan_dev02` <-> `tuanm_2002_dev`), writing style cosine similarity (TTR, sentence length, bilingual code-switching, character 3-grams), GitHub UTC active-hour timezone inference, and Gravatar MD5.
+5. **5-Agent Collaborative Architecture**:
+   - `PlannerAgent`: MCTS (UCB1) hypothesis tree search with dead-end backtracking, Reflexion adversarial noise filtering, and human checkpoints.
+   - `CollectorAgent` (`WebSearchConnector`, `GitHubPublicConnector`, `PublicWebFetcher`, `ManualSnippet`): SQLite HTTP cache, per-domain rate limiter, and Maigret-style Soft-404 filtering.
+   - `ReaderAgent`: Neuro-Symbolic Vietnamese/English extractor + optional LLM provider (Ollama local, Gemini, OpenAI).
+   - `EntityResolutionAgent`: 8D probabilistic matching with `NEGATIVE` constraint veto.
+   - `CriticVerifierAgent`: Verbatim quote grounding anti-hallucination gate + chronological timeline anomaly & gap detector.
+6. **Network Science Analytics**:
+   - **Adamic-Adar Index** for hidden 2-hop link prediction.
+   - **Label Propagation** community detection & **Betweenness Centrality** bridge node discovery.
+   - **Information Gain Pivot Ranking** (`suggest_pivots`) using NetworkX frontier degree + claim richness.
+
+## Built-in Investigation Playbooks
+1. `vietnam_student_alumni`: Anchors Vietnamese name variants with school/club/contest keywords and dev profiles.
+2. `developer_digital_footprint`: Pivots from handle/email -> GitHub commits -> UTC timezone -> tech blogs/writeups.
+3. `mystery_alias_unmasking`: Decomposes handle anatomy -> stylometry comparison -> 2-hop bridge search.
+
+## MCP Server Tools (`POST /api/mcp` or `python -m app.mcp_server`)
+- `stalker_generate_dorks(full_name, aliases?, organizations?, locations?, keywords?, negative_keywords?)`
+- `stalker_ingest_snippet(workspace_id, target_label, text, source_url?)`
+- `stalker_analyze_and_verify(workspace_id, subject_label, text, source_url?)`
+- `stalker_resolve_entities(node_a_id, node_b_id)`
+- `stalker_search_graph(workspace_id, query, limit?)`
+- `stalker_suggest_pivots(workspace_id, top_k?)`
+
+## Key REST API Endpoints (`http://127.0.0.1:8000`)
+- `GET /`: Interactive Cytoscape.js Workbench UI
+- `GET /llms.txt` & `GET /api/catalog.json`: AI-native discovery endpoints
+- `POST /api/workspaces`, `GET /api/workspaces/{id}/graph`, `GET /api/workspaces/{id}/search`, `GET /api/workspaces/{id}/pivots`
+- `POST /api/workspaces/{id}/investigations`, `POST /api/investigations/{bb_id}/step`
+- `POST /api/workspaces/{id}/agents/analyze-text`, `POST /api/workspaces/{id}/agents/resolve`, `GET /api/workspaces/{id}/nodes/{node_id}/timeline`
+- `GET /api/workspaces/{id}/analytics`, `GET /api/evaluation/benchmark`
+- Exports: `GET /api/workspaces/{id}/export/gexf`, `GET /api/workspaces/{id}/export/jsonl`, `GET /api/workspaces/{id}/export/csv`

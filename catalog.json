@@ -1,0 +1,88 @@
+{
+  "name": "Dupin",
+  "version": "2.0.0",
+  "description": "Local-First 5-Layer Concentric Multi-Agent OSINT & 8-Dimensional Entity Resolution Workbench",
+  "architecture": "5-layer-concentric-osint",
+  "ai_entrypoints": {
+    "agents_md": "AGENTS.md",
+    "skill_md": "SKILL.md",
+    "llms_txt": "llms.txt",
+    "llms_full_txt": "llms-full.txt",
+    "architecture_api": "/api/pipeline/architecture",
+    "mcp_http": "/api/mcp",
+    "mcp_stdio": "python -m app.mcp_server"
+  },
+  "pipeline_layers": [
+    {"layer": 1, "code": "L1_INTAKE_PERIMETER", "module": "backend/app/pipeline/layer1_intake.py"},
+    {"layer": 2, "code": "L2_OUTER_GATEKEEPER", "module": "backend/app/pipeline/layer2_gatekeeper.py"},
+    {"layer": 3, "code": "L3_MULTI_CHANNEL_COLLECTORS", "module": "backend/app/pipeline/layer3_collectors.py"},
+    {"layer": 4, "code": "L4_DEEP_CORE_REASONING", "module": "backend/app/pipeline/layer4_deep_core.py"},
+    {"layer": 5, "code": "L5_SYNTHESIS_DELIVERY", "module": "backend/app/pipeline/layer5_synthesis.py"}
+  ],
+  "feature_dimensions": [
+    "identity",
+    "spatiotemporal",
+    "education_career",
+    "interests_skills",
+    "stylometry_behavior",
+    "technical_artifact",
+    "relational",
+    "negative_constraint"
+  ],
+  "agents": [
+    {
+      "name": "PlannerAgent",
+      "module": "backend/app/agents/planner.py",
+      "algorithms": ["MCTS (UCB1)", "Dead-End Backtracking", "Reflexion Noise Filtering", "Human-in-the-Loop Checkpoints"]
+    },
+    {
+      "name": "CollectorAgent",
+      "module": "backend/app/connectors/",
+      "algorithms": ["Serper/SearXNG || Parallel ddgs", "Sherlock/Maigret v2 (55 platforms, 5 engines)", "SpiderFoot Event Bus", "5-Source Passive Domain Recon", "Deep PDF/XLSX Reader (120 pages)"]
+    },
+    {
+      "name": "ReaderAgent",
+      "module": "backend/app/agents/reader.py",
+      "algorithms": ["Neuro-Symbolic Vietnamese/English Extraction", "Hybrid LLM Adapter (Gemini Pool/Ollama/OpenAI)", "Gravatar MD5 Hashing"]
+    },
+    {
+      "name": "EntityResolutionAgent",
+      "module": "backend/app/agents/resolver.py",
+      "algorithms": ["8D Probabilistic Disambiguation", "Jaro-Winkler", "Vietnamese Phonetic Keys", "Handle Anatomy Matching", "Stylometry Cosine", "Negative Constraint Veto"]
+    },
+    {
+      "name": "CriticVerifierAgent",
+      "module": "backend/app/agents/critic.py",
+      "algorithms": ["Verbatim Quote Grounding", "Chronological Timeline Reconstruction", "Temporal Seniority & Grade-Age Impossibility Veto", "Timeline Gap Analysis"]
+    }
+  ],
+  "graph_analytics": [
+    "SQLite FTS5 (BM25) Hybrid Candidate Blocking (WAL + busy_timeout)",
+    "Bayesian Log-Odds Belief Updating with Echo-Chamber Damping",
+    "Information Gain Frontier Pivot Ranking",
+    "Adamic-Adar Hidden Link Prediction",
+    "Label Propagation Community Detection",
+    "Betweenness Centrality Bridge Node Discovery"
+  ],
+  "mcp_tools": [
+    "stalker_generate_dorks",
+    "stalker_ingest_snippet",
+    "stalker_analyze_and_verify",
+    "stalker_resolve_entities",
+    "stalker_search_graph",
+    "stalker_suggest_pivots",
+    "stalker_deep_investigate",
+    "stalker_decode_anchors",
+    "stalker_scan_username",
+    "stalker_analyze_phone",
+    "stalker_recon_domain_email"
+  ],
+  "export_formats": [
+    {"format": "JSON", "endpoint": "/api/workspaces/{workspace_id}/graph"},
+    {"format": "Obsidian Markdown", "endpoint": "/api/workspaces/{workspace_id}/export/obsidian"},
+    {"format": "STIX 2.1", "endpoint": "/api/workspaces/{workspace_id}/export/stix"},
+    {"format": "JSONL", "endpoint": "/api/workspaces/{workspace_id}/export/jsonl"},
+    {"format": "CSV", "endpoint": "/api/workspaces/{workspace_id}/export/csv"},
+    {"format": "GEXF", "endpoint": "/api/workspaces/{workspace_id}/export/gexf"}
+  ]
+}

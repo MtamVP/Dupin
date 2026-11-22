@@ -1,0 +1,30 @@
+# Stalker++
+
+> Local-First Multi-Agent OSINT & 8-Dimensional Entity Resolution Knowledge Graph Workbench. Built for human-AI co-investigation on publicly available information, featuring MCTS (UCB1) hypothesis search, Reflexion noise filtering, Bayesian Log-Odds belief updating, Stylometry, Adamic-Adar link prediction, and an MCP Server.
+
+## AI-Native Entrypoints
+- [AGENTS.md](AGENTS.md): Operating manual and guardrails for AI Agents (Antigravity, Claude Code, Codex, Cursor).
+- [SKILL.md](SKILL.md): Plug-and-play Agent Skill specification.
+- [catalog.json](catalog.json): Machine-readable catalog of all 5 Agents, 8 Feature Dimensions, Playbooks, MCP Tools, and API endpoints.
+- [llms-full.txt](llms-full.txt): Curated single-file technical reference of the entire Stalker++ architecture.
+
+## Core Algorithms & Modules
+- [backend/app/core/schemas.py](backend/app/core/schemas.py): 8-Dimensional Feature Ontology (`FeatureCategory`, `FeatureClaim`, `Node`, `Edge`).
+- [backend/app/core/normalizer.py](backend/app/core/normalizer.py): Vietnamese diacritic stripping, abbreviation expansion, Jaro-Winkler, and phonetic keys.
+- [backend/app/core/bayesian.py](backend/app/core/bayesian.py): Log-Odds Bayesian Belief Updating with Source Diversity Damping.
+- [backend/app/core/fingerprints.py](backend/app/core/fingerprints.py): Handle anatomy decomposition, Stylometry vector/3-gram cosine, and Gravatar MD5.
+- [backend/app/core/graph_store.py](backend/app/core/graph_store.py): SQLite + FTS5 (BM25) + NetworkX Knowledge Graph & persistent Blackboards.
+- [backend/app/core/graph_analytics.py](backend/app/core/graph_analytics.py): Adamic-Adar hidden link prediction, Label Propagation communities, and Betweenness bridge nodes.
+
+## Multi-Agent & MCP Layer
+- [backend/app/agents/planner.py](backend/app/agents/planner.py): MCTS (UCB1) PlannerAgent with live collection, dead-end backtracking, and Reflexion query reformulation.
+- [backend/app/agents/reader.py](backend/app/agents/reader.py): Neuro-Symbolic + LLM Hybrid Vietnamese/English extractor.
+- [backend/app/agents/resolver.py](backend/app/agents/resolver.py): 8D EntityResolutionAgent with Negative Constraint Veto.
+- [backend/app/agents/critic.py](backend/app/agents/critic.py): Anti-hallucination quote grounding and chronological timeline anomaly/gap auditor.
+- [backend/app/agents/playbooks.py](backend/app/agents/playbooks.py): Extensible OSINT Investigation Playbooks.
+- [backend/app/mcp_server.py](backend/app/mcp_server.py): JSON-RPC 2.0 MCP Server (Stdio & HTTP `/api/mcp`).
+
+## UI, Exports & Thesis Evaluation
+- [backend/app/ui_workbench.py](backend/app/ui_workbench.py): Interactive Cytoscape.js dark-mode workbench served at `/`.
+- [backend/app/evaluation/benchmark_thesis.py](backend/app/evaluation/benchmark_thesis.py): Quantitative benchmark comparing Stalker++ vs. Sherlock and Maigret baselines.
+- Exports: `/api/workspaces/{id}/export/gexf`, `/api/workspaces/{id}/export/jsonl`, `/api/workspaces/{id}/export/csv`.

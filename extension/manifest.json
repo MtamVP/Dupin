@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Dupin Companion — Public OSINT Clipper",
+  "version": "2.0.0",
+  "description": "Human-in-the-loop public snippet clipper for your local Dupin OSINT workbench (http://127.0.0.1:8000).",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Send public snippet to Dupin"
+  }
+}

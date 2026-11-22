@@ -1,0 +1,29 @@
+# All-in-One Local-First Stack: Stalker++ Workbench (React + FastAPI) + Parallel SearXNG
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: stalker-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+      - SEARXNG_SECRET=stalker-local-osint-searxng-secret-2026
+
+  stalker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stalker-workbench
+    restart: unless-stopped
+    depends_on:
+      - searxng
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend/data:/app/backend/data
+      - ./plugins:/app/plugins:ro
+    environment:
+      - STALKER_DB_PATH=data/stalker_pp.db
