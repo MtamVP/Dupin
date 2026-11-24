@@ -9,11 +9,18 @@
 Trước khi thực hiện bất kỳ thay đổi mã nguồn nào theo kế hoạch này, trạng thái ổn định **Dupin v2.0 (85/85 pytest passed, Vite production build clean)** đã được khóa an toàn tại 2 lớp độc lập:
 
 1. **GitHub Remote Snapshot & Tag**:
-   - Branch `main` tại commit `4f098ee`
+   - Branch `main` tại commit `0f97ec8` (CI xanh 100%: `backend-tests` 85/85 passed + `frontend-build` passed)
    - Git Tag: `v2.0-stable-backup`
    - Khôi phục tức thì bằng Git: `git checkout v2.0-stable-backup`
-2. **Bản sao lưu cục bộ đầy đủ (bao gồm cả cấu hình & SQLite data cục bộ, đã loại trừ khỏi Git qua `.gitignore`)**:
-   - Thư mục: `backups/dupin-stable-backup-20261124/` (116 tệp lõi: `backend/app`, `backend/tests`, `backend/data`, `frontend/src`, `desktop/src-tauri/src`, `extension`, `plugins`, `searxng`, `docker-compose.yml`, tài liệu).
+2. **Bản sao lưu cục bộ đầy đủ (bao gồm cả cấu hình, SQLite data & `Dupin.exe`, đã loại trừ khỏi Git qua `.gitignore`)**:
+   - Thư mục: `backups/dupin-stable-backup-20261124/` (148 tệp · 26.85 MB: toàn bộ `backend/app`, `backend/tests`, `backend/data`, `frontend/src`, `frontend/dist`, `desktop`, `docs`, `extension`, `plugins`, `research`, `searxng`, `.github`, `docker-compose.yml`, `Dupin.exe`, tài liệu).
+3. **Quy trình Thử nghiệm Cô lập (Clean-Lab Workflow — không làm bẩn dữ liệu v2)**:
+   - **Nhánh Git riêng**: Toàn bộ kế hoạch mới triển khai trên nhánh `feat/v3-master-plan`; **chỉ merge vào `main` sau khi tất cả giai đoạn kiểm chứng thành công**.
+   - **File SQLite thử nghiệm riêng (`backend/data/stalker_v3_lab.db`)**:
+     1. Copy `backend/data/stalker_pp.db` → `backend/data/stalker_v3_lab.db` (dùng chung `.stalker_key`).
+     2. Xóa trắng các bảng điều tra **chỉ trong `stalker_v3_lab.db`** (`workspaces`, `messages`, `nodes`, `edges`, `dossier_items`, `source_feedback`, `blackboard_logs`, `search_cache`), **giữ nguyên 100%** bảng `api_keys` và `local_config` (toàn bộ Gemini/Serper keys + SearXNG/Ollama).
+     3. Chạy bản thử nghiệm v3 với `STALKER_DB_PATH=data/stalker_v3_lab.db` để test từ trạng thái **web trắng 0 hồ sơ cũ** trong khi `stalker_pp.db` thật (chứa toàn bộ các cuộc điều tra v2) không bị chạm tới 1 byte nào.
+   - **Automated Tests & Evaluation Harness**: Luôn chạy trên SQLite trắng tạm (`tmp_path`), cô lập hoàn toàn khỏi cả 2 file DB trên.
 
 > **Nguyên tắc kỷ luật**: Mọi giai đoạn triển khai mới đều phải phát triển trên nhánh riêng hoặc kiểm chứng qua bộ test hồi quy trước khi hợp nhất; nếu kiểm chứng thất bại, hoàn toàn có thể quay về nguyên trạng `v2.0-stable-backup` mà không mất bản chất hiện tại của Dupin.
 
