@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from app.connectors.mirror_pivots import is_junk_category_url
+from app.core.anchor_decoder import is_vn_major_code
 from app.core.normalizer import normalize_org_or_location, normalize_text
 from app.pipeline.models import GateDecision, GatekeeperTelemetry, InvestigationContext
 
@@ -31,6 +32,33 @@ ORG_EN_ALIASES: dict[str, tuple[str, ...]] = {
     "hcmus": ("university of science", "khoa hoc tu nhien"),
     "hust": ("hanoi university of science and technology", "bach khoa ha noi"),
 }
+
+VN_COMMON_SURNAMES: tuple[str, ...] = (
+    "nguyen",
+    "tran",
+    "le",
+    "pham",
+    "hoang",
+    "huynh",
+    "phan",
+    "vu",
+    "vo",
+    "dang",
+    "bui",
+    "do",
+    "ho",
+    "ngo",
+    "duong",
+    "ly",
+    "dinh",
+    "doan",
+    "truong",
+    "to",
+    "mai",
+    "luong",
+    "ta",
+    "cao",
+)
 
 SENIOR_MARKERS: tuple[str, ...] = (
     "pgs.ts",
@@ -49,6 +77,16 @@ SENIOR_MARKERS: tuple[str, ...] = (
     "ths ",
     "ths.",
     "tiến sĩ",
+    "master of engineering",
+    "master of science",
+    "master of arts",
+    "m.eng",
+    "m.sc",
+    "chuyên gia",
+    "/chuyen-gia/",
+    "giảng viên",
+    "học thầy",
+    "thầy ",
 )
 
 
@@ -79,7 +117,22 @@ def _evaluate_relevance_detailed(
 
     byear = parsed.get("birth_year")
     low_raw = f"{text} {url}".lower()
-    if byear and int(byear) >= 2002 and not exact_dob_hit:
+
+    # High-entropy phone match (computed early so true phone hits are never falsely vetoed by temporal heuristics)
+    phone_hit = False
+    phone_cands = parsed.get("phone_candidates") or []
+    if phone_cands:
+        raw_digits_all = re.sub(r"\D+", "", f"{text} {url}")
+        for raw_ph in phone_cands:
+            ph_digits = re.sub(r"\D+", "", str(raw_ph or ""))
+            if ph_digits.startswith("84") and len(ph_digits) == 11:
+                ph_digits = "0" + ph_digits[2:]
+            core_ph = ph_digits.lstrip("0")
+            if len(core_ph) >= 8 and (ph_digits in raw_digits_all or core_ph in raw_digits_all):
+                phone_hit = True
+                break
+
+    if byear and int(byear) >= 2002 and not exact_dob_hit and not phone_hit:
         if any(mk in low_raw for mk in SENIOR_MARKERS) or re.search(r"tốt nghiệp.{0,40}19[6789]\d", low_raw):
             return GateDecision(accepted=False, reject_reason="temporal_seniority_veto")
 
@@ -95,16 +148,74 @@ def _evaluate_relevance_detailed(
             if has_uni_status and max_event_year < int(byear) + 17:
                 return GateDecision(accepted=False, reject_reason="temporal_grade_age_veto")
 
-    # 3. Match target's full name / alias / shortened-name+org / exact-DOB+partial-name-or-org
+    # Reverse-direction Temporal Veto: when target is an older cohort (birth_year <= 1990),
+    # reject unmistakable child/elementary worksheets or recent 2020-2029 freshman MSSV records
+    # (never blocks if parent/teacher context, exact DOB, or phone hit is present).
+    if byear and int(byear) <= 1990 and not exact_dob_hit and not phone_hit:
+        has_adult_role_ctx = any(
+            k in low_raw
+            for k in ("giáo viên", "giảng viên", "phụ huynh", "mẹ của", "cha của", "bố của", "parent", "teacher", "chủ nhiệm")
+        )
+        if not has_adult_role_ctx:
+            is_child_worksheet = bool(
+                re.search(
+                    r"\b(?:starter\s*[1-4]|movers|flyers|thiếu\s+nhi|tiểu\s+học|học\s+sinh\s+lớp\s*[1-5])\b",
+                    low_raw,
+                )
+            )
+            is_recent_freshman_mssv = bool(
+                re.search(
+                    r"(?:mssv|mã\s+số\s+sinh\s+viên)\s*[:\-]?\s*(?:312[0-9]{8}|2[0-6]52\d{4}|202[0-9]\d{4,6})\b",
+                    low_raw,
+                )
+            )
+            if is_child_worksheet or is_recent_freshman_mssv:
+                return GateDecision(accepted=False, reject_reason="temporal_younger_cohort_veto")
+
+    # 3. Match target's full name / alias / phone-digits / shortened-name+org / exact-DOB+partial-name-or-org
     matched: list[str] = []
     name_hit = bool(target_norm and (target_norm in combined or (len(target_joined) >= 6 and target_joined in combined)))
+
+    # Guard against Vietnamese historical figure + conjunction collision ("Nguyễn Ánh như các tài liệu xưa... Tây Sơn")
+    if name_hit and target_norm.endswith(" nhu") and not phone_hit and not exact_dob_hit:
+        if any(h in low_raw for h in ("tây sơn", "gia long", "chúa nguyễn", "đại việt", "triều nguyễn", "sử liệu")) and re.search(
+            r"\bnguyễn\s+ánh\s+như\b", low_raw
+        ):
+            name_hit = False
+    if not name_hit and target_joined.isdigit() and len(target_joined) >= 9:
+        raw_digits = re.sub(r"\D+", "", f"{text} {url}")
+        core_phone = target_joined.lstrip("0")
+        if target_joined in raw_digits or (len(core_phone) >= 8 and core_phone in raw_digits):
+            name_hit = True
+    # High-entropy anchor exact match (MST, SBD, ORCID, CCCD, License Plate, Crypto Wallet)
+    anchors_dict = parsed.get("anchors") or {}
+    if not name_hit and anchors_dict:
+        raw_blob_low = f"{text} {url}".lower()
+        anchor_exact_tokens: list[str] = []
+        anchor_exact_tokens.extend(str(x) for x in anchors_dict.get("tax_ids", []))
+        anchor_exact_tokens.extend(str(x) for x in anchors_dict.get("exam_ids", []))
+        anchor_exact_tokens.extend(str(x) for x in anchors_dict.get("orcid_ids", []))
+        anchor_exact_tokens.extend(str(x.get("cccd", "")) for x in anchors_dict.get("cccds", []))
+        anchor_exact_tokens.extend(str(x.get("plate", "")) for x in anchors_dict.get("license_plates", []))
+        anchor_exact_tokens.extend(str(x) for x in anchors_dict.get("crypto_wallets", []))
+        if any(tok and len(tok) >= 6 and tok.lower() in raw_blob_low for tok in anchor_exact_tokens):
+            name_hit = True
     alias_hit = any(normalize_text(a) in combined for a in parsed.get("aliases", []) if len(a) >= 3)
 
     matched_orgs: list[str] = []
     for org in parsed.get("organizations", []):
         org_n = normalize_text(org)
         org_exp = normalize_org_or_location(org)
-        org_tokens = [t for t in org_n.split() if t not in ("truong", "thpt", "thcs", "dh", "dai", "hoc")]
+        org_tokens = [
+            t
+            for t in org_n.split()
+            if t
+            not in (
+                "truong", "thpt", "thcs", "dh", "dai", "hoc", "chuyen",
+                "tp", "tphcm", "thanh", "pho", "ho", "chi", "minh",
+                "ha", "noi", "da", "nang", "can", "tho", "quoc", "gia",
+            )
+        ]
         short_sig = " ".join(org_tokens[-2:]) if len(org_tokens) >= 2 else org_n
         extra_sigs = ORG_EN_ALIASES.get(org_n, ())
         if (
@@ -153,6 +264,7 @@ def _evaluate_relevance_detailed(
 
     if (
         not name_hit
+        and not phone_hit
         and not alias_hit
         and not short_name_with_org_hit
         and not related_family_pivot
@@ -160,22 +272,123 @@ def _evaluate_relevance_detailed(
     ):
         return GateDecision(accepted=False, reject_reason="no_target_match")
 
+    # Prefix-surname & suffix-given-name & Vietnamese tone/diacritic mismatch checks:
+    # 1. Prefix surname: "Nguyễn Lê Ngọc Bích" when target is "Lê Ngọc Bích"
+    # 2. Suffix given name: "Nguyễn Anh Như Huỳnh" or "NGUYỄN ÁNH NHƯ NGỌC" when target is 3-word "Nguyễn Anh Như"
+    # 3. Diacritic mismatch: "Nguyễn Ánh Như" when target has explicit Vietnamese accents "Nguyễn Anh Như"
+    prefix_surname_mismatch = False
+    suffix_name_mismatch = False
+    diacritic_name_mismatch = False
+    if name_hit and len(name_parts) >= 3 and not phone_hit and not exact_dob_hit:
+        name_matches = list(re.finditer(rf"\b{re.escape(target_norm)}\b", combined))
+        if name_matches:
+            all_prefixed = True
+            for nm in name_matches:
+                before = combined[: nm.start()].rstrip()
+                prev_word = before.split()[-1] if before else ""
+                if prev_word not in VN_COMMON_SURNAMES:
+                    all_prefixed = False
+                    break
+            if all_prefixed:
+                prefix_surname_mismatch = True
+
+        # Check if followed by an extra capitalized Vietnamese/proper name token in raw text
+        # (e.g. "Huỳnh Nguyễn Thuận Thiên", "Huỳnh Nguyễn Thuận Thắng", "Nguyễn Văn A Heo")
+        # excluding non-name metadata words that normally follow a name in roster tables ("Nam", "Nữ", "Kinh", "Lớp", "Sinh"...).
+        _NON_NAME_FOLLOWERS = frozenset({
+            "nam", "nu", "kinh", "hoa", "khmer", "tay", "thai", "muong", "nung", "cham", "ede",
+            "lop", "khoa", "nganh", "truong", "thpt", "thcs", "dh", "dai", "hoc", "sinh", "ngay",
+            "tphcm", "hcm", "tp", "tinh", "quan", "huyen", "phuong", "xa", "dat", "khong", "gioi",
+            "kha", "trung", "binh", "xuat", "sac", "toan", "phan", "ban", "and", "or", "is", "at",
+            "in", "on", "the", "of", "for", "with", "from", "by", "to", "pdf", "doc", "docx", "xlsx",
+        })
+        raw_tname = str(parsed.get("target_name") or "").strip()
+        if raw_tname and len(name_parts) >= 3:
+            norm_text_KeepCase = re.sub(
+                r"\s+",
+                " ",
+                "".join(
+                    c
+                    for c in __import__("unicodedata").normalize("NFD", text)
+                    if __import__("unicodedata").category(c) != "Mn"
+                )
+                .replace("đ", "d")
+                .replace("Đ", "D"),
+            )
+            # Match `<target_name> <CapitalizedWord>` (NOT separated by punctuation like '.' or ',')
+            ext_name_re = re.compile(
+                rf"(?i)\b{'\\s+'.join(re.escape(w) for w in name_parts)}[ \t]+(?-i:([A-Z][a-z]{{1,12}}))\b"
+            )
+            ext_matches = list(ext_name_re.finditer(norm_text_KeepCase))
+            plain_matches = list(
+                re.finditer(rf"(?i)\b{'\\s+'.join(re.escape(w) for w in name_parts)}\b", norm_text_KeepCase)
+            )
+            if ext_matches and plain_matches:
+                # Only flag suffix mismatch if EVERY occurrence of target_name is followed by an extra capitalized name word
+                extra_follower_hits = [
+                    m for m in ext_matches if m.group(1).lower() not in _NON_NAME_FOLLOWERS
+                ]
+                if extra_follower_hits and len(extra_follower_hits) >= len(plain_matches):
+                    suffix_name_mismatch = True
+
+        # Check Vietnamese diacritic mismatch when both target_name and candidate text use Vietnamese accents
+        raw_tname_low = re.sub(r"\s+", " ", raw_tname.lower())
+        if any(ord(c) > 127 for c in raw_tname_low) and any(ord(c) > 127 for c in text):
+            text_low_clean = re.sub(r"\s+", " ", text.lower())
+            if raw_tname_low not in text_low_clean and target_norm not in text_low_clean:
+                diacritic_name_mismatch = True
+
+    # Direct Neighbor DOB Conflict Veto:
+    # When target's birth_year is known (e.g. 2007) and every occurrence of <target_name> in a roster snippet
+    # is immediately followed (within 25 chars) by a plausible birth date DD/MM/YYYY with a DIFFERENT year
+    # (e.g. "NGUYỄN VIỆT KHUÊ 01/04/2005" or "Nguyễn Việt Khuê 20/08/1997"), reject as wrong homonym.
+    if name_hit and byear and not exact_dob_hit and not phone_hit and len(name_parts) >= 2:
+        norm_for_dob = re.sub(
+            r"\s+",
+            " ",
+            "".join(
+                c
+                for c in __import__("unicodedata").normalize("NFD", text)
+                if __import__("unicodedata").category(c) != "Mn"
+            )
+            .replace("đ", "d")
+            .replace("Đ", "D")
+            .lower(),
+        )
+        dob_name_re = re.compile(rf"\b{'\\s+'.join(re.escape(w) for w in name_parts)}\b")
+        dob_matches = list(dob_name_re.finditer(norm_for_dob))
+        if dob_matches:
+            found_neighbor_years: list[int] = []
+            for dm in dob_matches:
+                tail = norm_for_dob[dm.end() : dm.end() + 28]
+                m_dt = re.search(r"\b\d{1,2}[/\-\.]\d{1,2}[/\-\.]((?:19|20)\d{2})\b", tail)
+                if m_dt:
+                    yr = int(m_dt.group(1))
+                    if 1950 <= yr <= 2018:
+                        found_neighbor_years.append(yr)
+            if found_neighbor_years and all(yr != byear for yr in found_neighbor_years):
+                return GateDecision(accepted=False, reject_reason="dob_mismatch_veto")
+
     if name_hit:
         matched.append(f"Tên: {parsed['target_name']}")
     elif short_name_with_org_hit:
         matched.append(f"Tên rút gọn + Ngữ cảnh: {parsed['target_name']}")
+    if phone_hit:
+        matched.append("Khớp SĐT")
     if alias_hit:
         matched.append("Alias")
     for mr in matched_related:
         matched.append(f"Liên quan: {mr}")
 
-    # 4. Secondary clue intersection & high-entropy exact DOB / relational co-occurrence boost
+    # 4. Secondary clue intersection & high-entropy exact DOB / phone / relational co-occurrence boost
     matched.extend(matched_orgs)
     for loc in parsed.get("locations", []):
         if normalize_text(loc) in combined:
             matched.append(loc)
 
     bonus = 0
+    if phone_hit:
+        bonus += 5
     if matched_related and (name_hit or short_name_with_org_hit):
         bonus += 4  # Both target AND related person co-occur on the same public document!
     if exact_dob_hit:
@@ -188,7 +401,56 @@ def _evaluate_relevance_detailed(
         if normalize_text(kw) in combined:
             matched.append(kw)
 
-    return GateDecision(accepted=True, score=len(matched) + bonus, matched_clues=matched)
+    # 5. Official Student/Candidate Roster Row Recognition:
+    # When a public document/Studocu/Scribd snippet contains "<TARGET_NAME> <DD/MM/YYYY> [Nam/Nữ] <7-12 digit MSSV>",
+    # boost it heavily (+4) so authentic roster tables always outrank essays or random mentions.
+    if (
+        name_hit
+        and not prefix_surname_mismatch
+        and not suffix_name_mismatch
+        and not diacritic_name_mismatch
+    ):
+        norm_no_acc = (
+            "".join(
+                c
+                for c in __import__("unicodedata").normalize("NFD", text)
+                if __import__("unicodedata").category(c) != "Mn"
+            )
+            .replace("đ", "d")
+            .replace("Đ", "D")
+            .lower()
+        )
+        roster_row_re = re.compile(
+            rf"\b{'\\s+'.join(re.escape(w) for w in name_parts)}\s+"
+            r"(\d{1,2}/\d{1,2}/(?:19|20)\d{2})\s+(?:nam|nu\s+)?(\d{7,12})\b"
+        )
+        m_row = roster_row_re.search(norm_no_acc)
+        if m_row:
+            row_dob, row_sid = m_row.group(1), m_row.group(2)
+            if not byear or row_dob.endswith(str(byear)):
+                bonus += 4
+                matched.append(f"Dòng danh sách: {row_dob} · MSSV {row_sid}")
+
+    if prefix_surname_mismatch:
+        bonus -= 2
+    if suffix_name_mismatch:
+        # Hard reject when every occurrence is a different longer name ("Huỳnh Nguyễn Thuận Thiên", "Nguyễn Văn A Heo")
+        # and there is no exact DOB/phone anchor corroborating the target!
+        if not exact_dob_hit and not phone_hit:
+            return GateDecision(accepted=False, reject_reason="suffix_name_mismatch")
+        bonus -= 3
+    if diacritic_name_mismatch:
+        bonus -= 2
+
+    final_score = max(0, len(matched) + bonus)
+    if prefix_surname_mismatch:
+        matched.append("Nghi khác họ đệm")
+    if suffix_name_mismatch:
+        matched.append("Nghi thừa tên chính")
+    if diacritic_name_mismatch:
+        matched.append("Khác dấu tên")
+
+    return GateDecision(accepted=True, score=final_score, matched_clues=matched)
 
 
 def score_source_relevance(
@@ -232,6 +494,11 @@ class OuterGatekeeper:
 
         self.telemetry.total_inspected += 1
 
+        # 1. Hard Permanent Veto: User explicitly marked this source URL as "Không hữu ích / Sai mục tiêu"
+        if norm_seen_key in self.ctx.rejected_urls:
+            self._record_reject("user_rejected_source")
+            return False
+
         # Outer URL hygiene & junk domain reject
         if is_junk_category_url(url) or len(title) > 180:
             self._record_reject("junk_url")
@@ -242,6 +509,24 @@ class OuterGatekeeper:
         score = decision.score
         matched = list(decision.matched_clues)
         reject_reason = decision.reject_reason
+
+        # 2. Progressive Unverified Rotation: If this source was already displayed in a previous turn
+        # and the user did NOT confirm/pin it into the Verified Dossier, rotate out ONLY low/ambiguous hits
+        # to make room for fresh deeper hits.
+        # NEVER rotate out sources that strongly corroborate the user's input clues (e.g. exact DOB/phone/
+        # org+name match with score >= 4, or deep-inspected `force_keep=True` official rosters), even if the
+        # user forgot to click "Lưu Hồ sơ"!
+        is_strong_input_corroboration = bool(
+            force_keep
+            or (is_rel and score >= 4 and "Nghi thừa tên chính" not in matched and "Khác dấu tên" not in matched)
+        )
+        if (
+            not is_strong_input_corroboration
+            and norm_seen_key in self.ctx.previously_shown_unverified_urls
+            and norm_seen_key not in self.ctx.confirmed_urls
+        ):
+            self._record_reject("unverified_rotated_out")
+            return False
 
         if consensus_score >= 3 and is_rel:
             score += 1
@@ -267,11 +552,14 @@ class OuterGatekeeper:
             or any(org.lower() in haystack_low for org in self.ctx.parsed.get("organizations", []) if len(org) >= 3)
         )
         for sid_info in self.ctx.anchors.get("student_ids", []):
-            if sid_info["student_id"] in f"{title} {snippet} {url}" and has_academic_or_vn_context:
+            sid_val = str(sid_info.get("student_id") or "").strip()
+            if not sid_val or is_vn_major_code(sid_val):
+                continue
+            if sid_val in f"{title} {snippet} {url}" and has_academic_or_vn_context:
                 score += 4
                 is_rel = True
-                if f"MSSV: {sid_info['student_id']}" not in matched:
-                    matched.append(f"MSSV: {sid_info['student_id']}")
+                if f"MSSV: {sid_val}" not in matched:
+                    matched.append(f"MSSV: {sid_val}")
 
         if mirror_boost_label and force_keep and has_academic_or_vn_context:
             score = max(score, 3)

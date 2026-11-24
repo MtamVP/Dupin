@@ -46,17 +46,24 @@ def mask_secret(secret: str) -> str:
 class IntegrationStore:
     """Manages rotating API key pools and local host settings in SQLite."""
 
+    _initialized_dbs: set[str] = set()
+
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._vault = SecretBox(self.db_path)
-        self._init_schema()
+        db_key = str(self.db_path.resolve())
+        if db_key not in self._initialized_dbs:
+            self._init_schema()
+            self._initialized_dbs.add(db_key)
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 10000;")
-        conn.execute("PRAGMA journal_mode = WAL;")
+        try:
+            conn.execute("PRAGMA busy_timeout = 15000;")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _init_schema(self) -> None:
@@ -201,10 +208,13 @@ class IntegrationStore:
             ).fetchone()
             if not row:
                 return None
-            conn.execute(
-                "UPDATE api_keys SET usage_count = usage_count + 1, last_used_ts = ? WHERE id = ?",
-                (now_ts, row["id"]),
-            )
+            try:
+                conn.execute(
+                    "UPDATE api_keys SET usage_count = usage_count + 1, last_used_ts = ? WHERE id = ?",
+                    (now_ts, row["id"]),
+                )
+            except sqlite3.OperationalError:
+                pass
             return {
                 "id": row["id"],
                 "name": row["name"],

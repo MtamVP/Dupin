@@ -112,6 +112,89 @@ def _clean_extracted_entity(raw: str) -> str:
     return "" if cleaned.lower() in STOP_WORKPLACES else cleaned
 
 
+_GENERIC_BYSTANDER_EMAIL_PREFIXES: tuple[str, ...] = (
+    "admin",
+    "info",
+    "contact",
+    "support",
+    "help",
+    "office",
+    "ctsv",
+    "daotao",
+    "pdt",
+    "tuyensinh",
+    "vanphong",
+    "khoa",
+    "bgh",
+    "hsv",
+    "doanthanhnien",
+    "webmaster",
+    "noreply",
+    "no-reply",
+    "hr",
+    "media",
+    "pr",
+)
+
+
+def is_email_plausible_for_subject(email: str, subject_label: str, context_text: str = "") -> bool:
+    """Verify whether a page-extracted email plausibly belongs to `subject_label` rather than a faculty/admin bystander."""
+    em = (email or "").strip().lower()
+    if "@" not in em:
+        return False
+    local = em.split("@", 1)[0]
+    local_alpha = re.sub(r"[^a-z0-9]", "", local)
+    if not local_alpha:
+        return False
+    if any(local == p or local.startswith(f"{p}.") or local.startswith(f"{p}_") for p in _GENERIC_BYSTANDER_EMAIL_PREFIXES):
+        return False
+
+    norm_subj = normalize_text(subject_label)
+    tokens = [re.sub(r"[^a-z0-9]", "", t) for t in norm_subj.split() if re.sub(r"[^a-z0-9]", "", t)]
+    if not tokens:
+        return True
+
+    # 1. Pure or dominant student ID email (e.g. 25521646@gm.uit.edu.vn or 31251020299@st.ueh.edu.vn)
+    digits_in_local = "".join(ch for ch in local_alpha if ch.isdigit())
+    if len(digits_in_local) >= 6:
+        # If context mentions another student ID right next to this email, or if digits match known text
+        return True
+
+    # 2. Check Vietnamese name token & abbreviation patterns for subject_label
+    # Example: "võ phúc minh tâm" -> tokens=["vo", "phuc", "minh", "tam"]
+    # Common VN academic/corporate handles:
+    # - given_name + initials: "tamvpm", "tamvp"
+    # - initials + given_name: "vpmtam"
+    # - given_name + middle/family: "minhtam", "tamvo", "vophucminhtam"
+    given = tokens[-1]
+    family = tokens[0]
+    initials_all = "".join(t[0] for t in tokens)
+    initials_prefix = "".join(t[0] for t in tokens[:-1])
+    joined_all = "".join(tokens)
+
+    plausible_markers = {
+        given,
+        f"{given}{initials_prefix}",
+        f"{initials_prefix}{given}",
+        f"{given}{family}",
+        f"{family}{given}",
+        joined_all,
+        initials_all,
+    }
+    if len(tokens) >= 2:
+        plausible_markers.add(f"{tokens[-2]}{given}")
+        plausible_markers.add(f"{given}{tokens[-2]}")
+
+    # If the email local part contains the subject's given name (length >= 3) or matches abbreviation patterns -> plausible!
+    if len(given) >= 3 and given in local_alpha:
+        return True
+    if any(m and len(m) >= 4 and m in local_alpha for m in plausible_markers):
+        return True
+
+    # Otherwise (e.g., "binhnt@uit.edu.vn" when subject is "võ phúc minh tâm"), it belongs to another person on the page!
+    return False
+
+
 class ReaderAgent:
     """Extracts 8D claims and relationship triples using neuro-symbolic rules + optional LLM."""
 
@@ -124,7 +207,13 @@ class ReaderAgent:
         subject_label: str,
         source_url: str = "manual://reader-agent",
     ) -> ExtractionResult:
-        claims, outbound = extract_rule_based_claims(text, source_url)
+        raw_claims, outbound = extract_rule_based_claims(text, source_url)
+        claims: list[FeatureClaim] = []
+        for rc in raw_claims:
+            if rc.key == "email" and source_url != "user://prompt":
+                if not is_email_plausible_for_subject(str(rc.value), subject_label, text):
+                    continue
+            claims.append(rc)
         triples: list[ExtractedTriple] = []
 
         # Check if subject_label (or unaccented form) is explicitly mentioned in text
@@ -171,6 +260,36 @@ class ReaderAgent:
                     source_url=source_url,
                 )
             )
+
+        # Infer academic institution from authoritative `.edu.vn` source URLs when the target is mentioned in the document
+        if norm_subj and norm_subj in normalize_text(text) and ".edu.vn" in source_url.lower():
+            from app.core.graph_store import GraphStore
+
+            url_low = source_url.lower()
+            for dom, canon_org in GraphStore._KNOWN_DOMAIN_ORG_MAP.items():
+                if dom in url_low:
+                    claims.append(
+                        FeatureClaim(
+                            category=FeatureCategory.EDUCATION_CAREER,
+                            key="school_or_org",
+                            value=canon_org,
+                            confidence=0.90,
+                            source_url=source_url,
+                            evidence_quote=text[:140],
+                        )
+                    )
+                    triples.append(
+                        ExtractedTriple(
+                            subject_label=subject_label,
+                            relation="STUDIED_OR_WORKED_AT",
+                            object_label=canon_org,
+                            object_type="Org",
+                            confidence=0.90,
+                            evidence_quote=text[:140],
+                            source_url=source_url,
+                        )
+                    )
+                    break
 
         # Split text into sentence windows so every extracted triple carries an exact quote
         sentences = [s.strip() for s in re.split(r"(?<=[.!?;\n])\s+", text) if s.strip()]

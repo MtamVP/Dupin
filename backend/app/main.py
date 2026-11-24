@@ -11,7 +11,7 @@ from typing import Any, Optional
 import networkx as nx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agents.blackboard import InvestigationBlackboard
@@ -26,7 +26,16 @@ from app.connectors.document_reader import fetch_and_inspect_document
 from app.connectors.github_api import GitHubPublicConnector
 from app.connectors.web_fetcher import PublicWebFetcher, ingest_manual_snippet
 from app.connectors.web_search import DorkRequest, generate_smart_dorks, test_searxng_connection
-from app.core.exporters import export_obsidian_markdown, export_stix_bundle
+from app.core.exporters import (
+    collect_verified_dossier_deep_excerpts,
+    export_obsidian_markdown,
+    export_stix_bundle,
+    export_verified_docx,
+    export_verified_html,
+    export_verified_pdf,
+    export_verified_xlsx,
+    redact_pii,
+)
 from app.core.fingerprints import (
     extract_handle_fingerprint,
     handle_pattern_similarity,
@@ -181,7 +190,7 @@ class MCTSStepRequest(BaseModel):
 
 
 class ChatInvestigateRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
+    prompt: str = ""
     live_search: bool = True
     deep_mode: bool = True
     use_llm: bool = False
@@ -190,6 +199,11 @@ class ChatInvestigateRequest(BaseModel):
     image_mime: str = "image/png"
     geo_point: Optional[dict[str, Any]] = None
     attached_file_text: Optional[str] = None
+
+
+class LocalFileExtractRequest(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=260)
+    content_b64: str = Field(..., min_length=1)
 
 
 class DossierItemCreate(BaseModel):
@@ -208,8 +222,19 @@ class DossierItemUpdate(BaseModel):
     note: Optional[str] = None
 
 
+class SourceFeedbackRequest(BaseModel):
+    source_url: str = Field(..., min_length=1)
+    verdict: str = Field("REJECTED", pattern="^(REJECTED|CONFIRMED)$")
+    title: str = ""
+
+
 class WorkspaceRenameRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    pinned: Optional[bool] = None
+
+
+class WorkspacePinRequest(BaseModel):
+    pinned: bool
 
 
 class LLMSettingsUpdate(BaseModel):
@@ -250,14 +275,26 @@ async def list_local_ollama_models(base_url: Optional[str] = None) -> dict[str, 
     import httpx
 
     target_url = (base_url or _integration_store().get_local_config().ollama_base_url).rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(f"{target_url}/api/tags")
-            resp.raise_for_status()
-            models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
-            return {"reachable": True, "base_url": target_url, "models": models}
-    except Exception as exc:
-        return {"reachable": False, "base_url": target_url, "models": [], "error": str(exc)}
+    candidates = [target_url]
+    if "localhost" in target_url or "127.0.0.1" in target_url:
+        docker_host = target_url.replace("localhost", "host.docker.internal").replace(
+            "127.0.0.1", "host.docker.internal"
+        )
+        if docker_host not in candidates:
+            candidates.append(docker_host)
+
+    last_err = ""
+    for cand in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(f"{cand}/api/tags")
+                resp.raise_for_status()
+                models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
+                return {"reachable": True, "base_url": cand, "models": models}
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    return {"reachable": False, "base_url": target_url, "models": [], "error": last_err}
 
 
 @app.get("/api/integrations/searxng/test")
@@ -364,7 +401,21 @@ def list_workspaces() -> list[Workspace]:
 
 @app.patch("/api/workspaces/{workspace_id}", response_model=Workspace)
 def rename_workspace(workspace_id: str, payload: WorkspaceRenameRequest) -> Workspace:
-    updated = store.rename_workspace(workspace_id, payload.name)
+    updated: Optional[Workspace] = None
+    if payload.name is not None:
+        updated = store.rename_workspace(workspace_id, payload.name)
+    if payload.pinned is not None:
+        updated = store.pin_workspace(workspace_id, payload.pinned)
+    if not updated:
+        updated = store.get_workspace(workspace_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return updated
+
+
+@app.patch("/api/workspaces/{workspace_id}/pin", response_model=Workspace)
+def pin_workspace(workspace_id: str, payload: WorkspacePinRequest) -> Workspace:
+    updated = store.pin_workspace(workspace_id, payload.pinned)
     if not updated:
         raise HTTPException(status_code=404, detail="Workspace not found")
     return updated
@@ -400,6 +451,32 @@ def update_edge_status(edge_id: str, payload: EdgeStatusUpdate) -> Edge:
     if not edge:
         raise HTTPException(status_code=404, detail="Edge not found")
     return edge
+
+
+@app.delete("/api/nodes/{node_id}")
+def delete_node_endpoint(node_id: str) -> dict[str, Any]:
+    if not store.delete_node(node_id):
+        raise HTTPException(status_code=404, detail="Node not found")
+    return {"deleted": True, "id": node_id}
+
+
+@app.delete("/api/nodes/{node_id}/claims")
+def delete_node_claim_endpoint(
+    node_id: str,
+    key: str = Query(..., min_length=1),
+    value: str = Query(..., min_length=1),
+) -> Node:
+    updated = store.delete_node_claim(node_id, key, value)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return updated
+
+
+@app.delete("/api/edges/{edge_id}")
+def delete_edge_endpoint(edge_id: str) -> dict[str, Any]:
+    if not store.delete_edge(edge_id):
+        raise HTTPException(status_code=404, detail="Edge not found")
+    return {"deleted": True, "id": edge_id}
 
 
 @app.get("/api/workspaces/{workspace_id}/graph", response_model=GraphSnapshot)
@@ -635,16 +712,45 @@ def delete_dossier(item_id: str) -> dict[str, Any]:
     return {"deleted": True, "id": item_id}
 
 
+@app.get("/api/workspaces/{workspace_id}/source-feedback")
+def list_source_feedback(workspace_id: str) -> dict[str, Any]:
+    if not store.get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return {"items": store.list_source_feedback(workspace_id)}
+
+
+@app.post("/api/workspaces/{workspace_id}/source-feedback", status_code=201)
+def add_source_feedback(workspace_id: str, payload: SourceFeedbackRequest) -> dict[str, Any]:
+    if not store.get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return store.add_source_feedback(
+        workspace_id=workspace_id,
+        source_url=payload.source_url,
+        verdict=payload.verdict,
+        title=payload.title,
+    )
+
+
+@app.delete("/api/workspaces/{workspace_id}/source-feedback")
+def remove_source_feedback(workspace_id: str, source_url: str = Query(..., min_length=1)) -> dict[str, Any]:
+    if not store.get_workspace(workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    deleted = store.delete_source_feedback(workspace_id, source_url)
+    return {"deleted": deleted, "source_url": source_url}
+
+
 @app.post("/api/workspaces/{workspace_id}/chat")
 async def chat_investigate(workspace_id: str, payload: ChatInvestigateRequest) -> dict[str, Any]:
     if not store.get_workspace(workspace_id):
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if not payload.prompt.strip():
+    has_multimodal = bool(payload.image_b64 or (payload.attached_file_text and payload.attached_file_text.strip()) or payload.geo_point)
+    if not payload.prompt.strip() and not has_multimodal:
         raise HTTPException(status_code=422, detail="Prompt must not be blank")
+    effective_prompt = payload.prompt.strip() or "Phân tích dữ liệu đa phương thức đính kèm (Ảnh / Tài liệu / Tọa độ) và truy vết mục tiêu"
     return await handle_chat_turn(
         store=store,
         workspace_id=workspace_id,
-        prompt=payload.prompt,
+        prompt=effective_prompt,
         live_search=payload.live_search,
         deep_mode=payload.deep_mode,
         use_llm=payload.use_llm,
@@ -662,8 +768,10 @@ async def chat_investigate_stream(workspace_id: str, payload: ChatInvestigateReq
     """Server-Sent Events (SSE) streaming endpoint for real-time AI Agent progress & output."""
     if not store.get_workspace(workspace_id):
         raise HTTPException(status_code=404, detail="Workspace not found")
-    if not payload.prompt.strip():
+    has_multimodal = bool(payload.image_b64 or (payload.attached_file_text and payload.attached_file_text.strip()) or payload.geo_point)
+    if not payload.prompt.strip() and not has_multimodal:
         raise HTTPException(status_code=422, detail="Prompt must not be blank")
+    effective_prompt = payload.prompt.strip() or "Phân tích dữ liệu đa phương thức đính kèm (Ảnh / Tài liệu / Tọa độ) và truy vết mục tiêu"
 
     async def event_gen():
         def _sse(event_type: str, data: dict[str, Any]) -> str:
@@ -676,7 +784,7 @@ async def chat_investigate_stream(workspace_id: str, payload: ChatInvestigateReq
             result = await handle_chat_turn(
                 store=store,
                 workspace_id=workspace_id,
-                prompt=payload.prompt,
+                prompt=effective_prompt,
                 live_search=payload.live_search,
                 deep_mode=payload.deep_mode,
                 use_llm=payload.use_llm,
@@ -805,35 +913,69 @@ def export_graph_jsonl(workspace_id: str) -> str:
 
 
 @app.get("/api/workspaces/{workspace_id}/export/csv", response_class=PlainTextResponse)
-def export_graph_csv(workspace_id: str) -> str:
-    """Export workspace claims & edges as a flat CSV table with provenance for Excel / Pandas."""
+def export_graph_csv(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(False, description="Export only user-verified dossier items and verified claims"),
+) -> str:
+    """Export workspace verified dossier, claims & edges as a flat CSV table with provenance for Excel / Pandas."""
     snapshot = store.get_graph(workspace_id)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Workspace not found")
+    clean = redact_pii if redact else (lambda x: str(x or ""))
+    dossier = store.list_dossier_items(workspace_id)
+    verified_urls = {str(it.get("source_url") or "").strip().rstrip("/").lower() for it in dossier if it.get("source_url")}
+
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(
         ["record_type", "entity_or_source", "relation_or_key", "value_or_target", "polarity_or_status", "confidence", "source_url", "evidence_quote"]
     )
+    for it in dossier:
+        writer.writerow(
+            [
+                "verified_dossier",
+                clean(snapshot.workspace.name),
+                clean(it.get("field_key", "")),
+                clean(it.get("field_value", "")),
+                "VERIFIED",
+                1.0,
+                clean(it.get("source_url", "")),
+                clean(it.get("note", "")),
+            ]
+        )
     node_labels = {n.id: n.label for n in snapshot.nodes}
     for n in snapshot.nodes:
         for c in n.claims:
+            c_url_norm = str(c.source_url or "").strip().rstrip("/").lower()
+            if verified_only and c_url_norm != "manual://user_verified" and (not c_url_norm or c_url_norm not in verified_urls):
+                continue
             writer.writerow(
-                ["claim", n.label, f"{c.category.value}:{c.key}", str(c.value), c.polarity, c.confidence, c.source_url, c.evidence_quote]
+                [
+                    "claim",
+                    clean(n.label),
+                    f"{c.category.value}:{c.key}",
+                    clean(str(c.value)),
+                    c.polarity,
+                    c.confidence,
+                    clean(c.source_url),
+                    clean(c.evidence_quote),
+                ]
             )
-    for e in snapshot.edges:
-        writer.writerow(
-            [
-                "edge",
-                node_labels.get(e.source_id, e.source_id),
-                e.relation,
-                node_labels.get(e.target_id, e.target_id),
-                e.status,
-                e.confidence,
-                e.source_url,
-                e.evidence_quote,
-            ]
-        )
+    if not verified_only:
+        for e in snapshot.edges:
+            writer.writerow(
+                [
+                    "edge",
+                    clean(node_labels.get(e.source_id, e.source_id)),
+                    e.relation,
+                    clean(node_labels.get(e.target_id, e.target_id)),
+                    e.status,
+                    e.confidence,
+                    clean(e.source_url),
+                    clean(e.evidence_quote),
+                ]
+            )
     return buf.getvalue()
 
 
@@ -864,6 +1006,22 @@ def get_pipeline_architecture() -> dict[str, Any]:
 async def inspect_public_document(payload: DocumentInspectRequest) -> dict[str, Any]:
     """Download and extract target-matching rows from a public PDF or Excel (XLSX) file."""
     return await fetch_and_inspect_document(payload.url, payload.target_terms)
+
+
+@app.post("/api/tools/extract-file")
+async def extract_local_file_endpoint(payload: LocalFileExtractRequest) -> dict[str, Any]:
+    """Extract searchable text and metadata from a locally uploaded PDF, Excel (XLSX), CSV, vCard (.vcf), or text file."""
+    from app.connectors.multimodal_intake import extract_uploaded_file_text
+
+    return extract_uploaded_file_text(payload.content_b64, payload.filename)
+
+
+@app.post("/api/tools/extract-image-exif")
+async def extract_local_image_exif_endpoint(payload: LocalFileExtractRequest) -> dict[str, Any]:
+    """Extract local EXIF / GPS / camera metadata from an uploaded image in 0ms."""
+    from app.connectors.multimodal_intake import extract_image_exif_metadata
+
+    return extract_image_exif_metadata(payload.content_b64)
 
 
 @app.post("/api/tools/scan-username")
@@ -964,29 +1122,171 @@ async def ingest_browser_clip(workspace_id: str, payload: BrowserClipRequest) ->
 
 
 @app.get("/api/workspaces/{workspace_id}/export/obsidian", response_class=PlainTextResponse)
-def export_workspace_obsidian(
+async def export_workspace_obsidian(
     workspace_id: str,
     redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(False, description="Export only user-verified dossier items and verified claims"),
+    deep_read: bool = Query(False, description="Deep-read confirmed PDF/XLSX/Scribd/Studocu links in dossier"),
 ) -> str:
     """Export verified dossier and 8D knowledge graph as an Obsidian Markdown note."""
     snapshot = store.get_graph(workspace_id)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Workspace not found")
     dossier = store.list_dossier_items(workspace_id)
-    return export_obsidian_markdown(snapshot, dossier, redact=redact)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier) if deep_read else []
+    return export_obsidian_markdown(
+        snapshot,
+        dossier,
+        redact=redact,
+        verified_only=verified_only,
+        deep_docs=deep_docs,
+    )
 
 
 @app.get("/api/workspaces/{workspace_id}/export/stix")
 def export_workspace_stix(
     workspace_id: str,
     redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(False, description="Export only user-verified dossier items and verified claims"),
 ) -> JSONResponse:
     """Export workspace entities, relationships, and dossier as a STIX 2.1 JSON bundle."""
     snapshot = store.get_graph(workspace_id)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Workspace not found")
     dossier = store.list_dossier_items(workspace_id)
-    return JSONResponse(content=export_stix_bundle(snapshot, dossier, redact=redact))
+    return JSONResponse(content=export_stix_bundle(snapshot, dossier, redact=redact, verified_only=verified_only))
+
+
+@app.get("/api/workspaces/{workspace_id}/export/docx")
+async def export_workspace_docx(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(True, description="Export only user-verified dossier items and verified claims"),
+) -> Response:
+    """Deep-read confirmed PDF/XLSX/Scribd/Studocu documents and export a formatted Word (.docx) dossier report."""
+    snapshot = store.get_graph(workspace_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    dossier = store.list_dossier_items(workspace_id)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier)
+    docx_bytes = export_verified_docx(
+        snapshot,
+        dossier,
+        deep_docs,
+        redact=redact,
+        verified_only=verified_only,
+    )
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="dupin-verified-dossier-{workspace_id[:8]}.docx"'},
+    )
+
+
+@app.get("/api/workspaces/{workspace_id}/export/pdf")
+async def export_workspace_pdf(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(True, description="Export only user-verified dossier items and verified claims"),
+) -> Response:
+    """Deep-read confirmed PDF/XLSX/Scribd/Studocu documents and export a formatted PDF (.pdf) dossier report."""
+    snapshot = store.get_graph(workspace_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    dossier = store.list_dossier_items(workspace_id)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier)
+    pdf_bytes = export_verified_pdf(
+        snapshot,
+        dossier,
+        deep_docs,
+        redact=redact,
+        verified_only=verified_only,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="dupin-verified-dossier-{workspace_id[:8]}.pdf"'},
+    )
+
+
+@app.get("/api/workspaces/{workspace_id}/export/xlsx")
+async def export_workspace_xlsx(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(True, description="Export only user-verified dossier items and verified claims"),
+) -> Response:
+    """Deep-read confirmed PDF/XLSX/Scribd/Studocu documents and export a multi-sheet Excel (.xlsx) workbook."""
+    snapshot = store.get_graph(workspace_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    dossier = store.list_dossier_items(workspace_id)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier)
+    xlsx_bytes = export_verified_xlsx(
+        snapshot,
+        dossier,
+        deep_docs,
+        redact=redact,
+        verified_only=verified_only,
+    )
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="dupin-verified-dossier-{workspace_id[:8]}.xlsx"'},
+    )
+
+
+@app.get("/api/workspaces/{workspace_id}/export/html", response_class=HTMLResponse)
+async def export_workspace_html(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(True, description="Export only user-verified dossier items and verified claims"),
+) -> str:
+    """Deep-read confirmed PDF/XLSX/Scribd/Studocu documents and render a print-ready Editorial HTML report."""
+    snapshot = store.get_graph(workspace_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    dossier = store.list_dossier_items(workspace_id)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier)
+    return export_verified_html(
+        snapshot,
+        dossier,
+        deep_docs,
+        redact=redact,
+        verified_only=verified_only,
+    )
+
+
+@app.get("/api/workspaces/{workspace_id}/export/json")
+async def export_workspace_verified_json(
+    workspace_id: str,
+    redact: bool = Query(False, description="Mask emails, phone numbers, DOBs, and IDs"),
+    verified_only: bool = Query(True, description="Export only user-verified dossier items and verified claims"),
+) -> JSONResponse:
+    """Export clean Verified Dossier JSON including deep-read PDF/XLSX/Scribd/Studocu excerpts."""
+    snapshot = store.get_graph(workspace_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    clean = redact_pii if redact else (lambda x: str(x or ""))
+    dossier = store.list_dossier_items(workspace_id)
+    deep_docs = await collect_verified_dossier_deep_excerpts(snapshot, dossier)
+    return JSONResponse(
+        content={
+            "workspace_id": workspace_id,
+            "workspace_name": clean(snapshot.workspace.name),
+            "verified_only": verified_only,
+            "redacted": redact,
+            "verified_dossier_items": [
+                {
+                    "field_key": clean(it.get("field_key", "")),
+                    "field_value": clean(it.get("field_value", "")),
+                    "source_url": clean(it.get("source_url", "")),
+                    "note": clean(it.get("note", "")),
+                }
+                for it in dossier
+            ],
+            "deep_read_documents": deep_docs,
+        }
+    )
 
 
 @app.get("/llms.txt", response_class=PlainTextResponse)

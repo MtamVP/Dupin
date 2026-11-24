@@ -19,12 +19,22 @@ class BaseLLMProvider(ABC):
 
 
 class OllamaProvider(BaseLLMProvider):
-    """100% local LLM execution via Ollama HTTP API."""
+    """100% local LLM execution via Ollama HTTP API (with automatic Docker host fallback & 90s cold-start timeout)."""
 
-    def __init__(self, base_url: str, model: str, timeout: float = 60.0) -> None:
+    def __init__(self, base_url: str, model: str, timeout: float = 90.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.timeout = timeout
+        self.timeout = max(float(timeout), 60.0)
+
+    def _candidate_urls(self) -> list[str]:
+        urls = [self.base_url]
+        if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
+            docker_host = self.base_url.replace("localhost", "host.docker.internal").replace(
+                "127.0.0.1", "host.docker.internal"
+            )
+            if docker_host not in urls:
+                urls.append(docker_host)
+        return urls
 
     async def generate(self, prompt: str, system: str = "", temperature: float = 0.2) -> str:
         payload = {
@@ -34,10 +44,19 @@ class OllamaProvider(BaseLLMProvider):
             "stream": False,
             "options": {"temperature": temperature},
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(f"{self.base_url}/api/generate", json=payload)
-            resp.raise_for_status()
-            return resp.json().get("response", "")
+        last_exc: Optional[Exception] = None
+        for u in self._candidate_urls():
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(f"{u}/api/generate", json=payload)
+                    resp.raise_for_status()
+                    return resp.json().get("response", "")
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                continue
+        if last_exc:
+            raise last_exc
+        return ""
 
     async def analyze_image_and_text(
         self,
@@ -53,13 +72,22 @@ class OllamaProvider(BaseLLMProvider):
             "images": [image_b64],
             "stream": False,
         }
-        if client is not None:
-            resp = await client.post(f"{self.base_url}/api/generate", json=payload)
-        else:
-            async with httpx.AsyncClient(timeout=self.timeout) as temp_client:
-                resp = await temp_client.post(f"{self.base_url}/api/generate", json=payload)
-        resp.raise_for_status()
-        return resp.json().get("response", "")
+        last_exc: Optional[Exception] = None
+        for u in self._candidate_urls():
+            try:
+                if client is not None:
+                    resp = await client.post(f"{u}/api/generate", json=payload, timeout=self.timeout)
+                else:
+                    async with httpx.AsyncClient(timeout=self.timeout) as temp_client:
+                        resp = await temp_client.post(f"{u}/api/generate", json=payload)
+                resp.raise_for_status()
+                return resp.json().get("response", "")
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                continue
+        if last_exc:
+            raise last_exc
+        return ""
 
 
 class OpenAICompatibleProvider(BaseLLMProvider):

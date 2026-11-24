@@ -21,3 +21,6 @@ WebView2Loader.dll
 .env.local
 .DS_Store
 Thumbs.db
+
+# Local full-state backups (never push to remote)
+backups/

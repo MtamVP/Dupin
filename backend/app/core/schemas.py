@@ -134,6 +134,9 @@ class Workspace(WorkspaceCreate):
     """Persisted investigation workspace."""
 
     id: str = Field(default_factory=new_id)
+    pinned: bool = False
+    search_summary: str = ""
+    last_active_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

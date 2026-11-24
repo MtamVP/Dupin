@@ -103,6 +103,9 @@ class InvestigationContext:
     dossier_blob: str = ""
     geo_blob: str = ""
     phone_candidates: list[str] = field(default_factory=list)
+    rejected_urls: set[str] = field(default_factory=set)
+    confirmed_urls: set[str] = field(default_factory=set)
+    previously_shown_unverified_urls: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -149,6 +152,7 @@ class CollectionBundle:
     google_ai_summary: str = ""
     google_ai_error: str = ""
     gatekeeper_stats: GatekeeperTelemetry = field(default_factory=GatekeeperTelemetry)
+    investigation_tree: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

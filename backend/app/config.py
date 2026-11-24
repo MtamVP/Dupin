@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="STALKER_", env_file=".env", extra="ignore")
 
-    app_name: str = "Stalker++ OSINT Workbench"
+    app_name: str = "Dupin OSINT Workbench"
     db_path: Path = Path("data/stalker_pp.db")
 
     # LLM Provider Configuration: local Ollama or external API

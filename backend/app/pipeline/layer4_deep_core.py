@@ -296,6 +296,22 @@ def seed_core_graph_and_blackboard(
                 source_url="user://prompt",
             ),
         )
+    for alias in parsed.get("aliases", []):
+        al_val = str(alias or "").strip()
+        if al_val and not al_val.isdigit():
+            al_node = store.upsert_node(workspace_id, NodeCreate(type="Alias", label=al_val, confidence=0.90))
+            store.add_edge(
+                workspace_id,
+                EdgeCreate(
+                    source_id=target_node.id,
+                    target_id=al_node.id,
+                    relation="OWNS_ACCOUNT",
+                    confidence=0.90,
+                    status="VERIFIED",
+                    evidence_quote=f"Tài khoản / Biệt danh: {al_val}",
+                    source_url="user://prompt",
+                ),
+            )
     for rp in parsed.get("related_people", []):
         rp_name = str(rp.get("name") or "").strip()
         rp_rel = str(rp.get("relation") or "RELATED_TO")
@@ -312,6 +328,136 @@ def seed_core_graph_and_blackboard(
                     evidence_quote=f"Manh mối quan hệ ({rp_rel}): {rp_name}",
                     source_url="user://prompt",
                 ),
+            )
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"Người liên quan ({rp_rel})",
+                field_value=f"{target_name} — {rp_name}",
+                category="social_relation",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+
+    # Auto-seed structured confirmed clues from user input directly into Verified Dossier.
+    # CRITICAL: If this turn pivoted to a secondary/related person (e.g., sibling "Đặng Như Phong" inside
+    # the workspace for "Đặng Kiều Diễm"), NEVER overwrite the primary subject's "Họ và tên" / "Ngày sinh" /
+    # "MSSV" with the secondary person's fields — tag them under the secondary person's name instead!
+    ws_obj = store.get_workspace(workspace_id)
+    ws_name_norm = normalize_text(ws_obj.name) if ws_obj else ""
+    existing_dossier = store.list_dossier_items(workspace_id)
+    primary_dossier_name = next(
+        (
+            str(it.get("field_value") or "").strip()
+            for it in existing_dossier
+            if str(it.get("field_key") or "").strip().lower() in ("họ và tên", "họ tên", "full name")
+        ),
+        "",
+    )
+    is_secondary_person_pivot = bool(
+        target_name
+        and target_name != "Đối tượng chưa rõ tên"
+        and (
+            (primary_dossier_name and normalize_text(target_name) != normalize_text(primary_dossier_name))
+            or (
+                not primary_dossier_name
+                and ws_name_norm
+                and not ws_name_norm.startswith(("dieu tra", "investigation"))
+                and normalize_text(target_name) != ws_name_norm
+                and ws_name_norm not in normalize_text(target_name)
+                and normalize_text(target_name) not in ws_name_norm
+            )
+        )
+    )
+    key_suffix = f" ({target_name})" if is_secondary_person_pivot else ""
+
+    if target_name and target_name != "Đối tượng chưa rõ tên" and len(target_name) <= 60:
+        if is_secondary_person_pivot:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key="Người liên quan đang tra cứu",
+                field_value=target_name,
+                category="social_relation",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào (không ghi đè mục tiêu chính)",
+            )
+        else:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key="Họ và tên",
+                field_value=target_name,
+                category="identity",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+    if parsed.get("birth_date"):
+        store.add_dossier_item(
+            workspace_id=workspace_id,
+            field_key=f"Ngày sinh{key_suffix}",
+            field_value=str(parsed["birth_date"]),
+            category="spatiotemporal",
+            source_url="user://prompt",
+            note="Tự động lưu từ thông tin đầu vào",
+        )
+    elif parsed.get("birth_year"):
+        store.add_dossier_item(
+            workspace_id=workspace_id,
+            field_key=f"Năm sinh{key_suffix}",
+            field_value=str(parsed["birth_year"]),
+            category="spatiotemporal",
+            source_url="user://prompt",
+            note="Tự động lưu từ thông tin đầu vào",
+        )
+    for org in parsed.get("organizations", []):
+        if org and len(org) <= 80:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"Trường / Tổ chức{key_suffix}",
+                field_value=org,
+                category="education_career",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+    for loc in parsed.get("locations", []):
+        if loc and len(loc) <= 60:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"Địa điểm / Quê quán{key_suffix}",
+                field_value=loc,
+                category="spatiotemporal",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+    for sid_info in anchors.get("student_ids", []):
+        sid_val = str(sid_info.get("student_id") or "").strip()
+        if sid_val:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"MSSV / Mã định danh{key_suffix}",
+                field_value=sid_val,
+                category="identity",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+    for em in anchors.get("emails", []):
+        em_val = str(em.get("email") or "").strip()
+        if em_val:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"Email{key_suffix}",
+                field_value=em_val,
+                category="technical_artifact",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
+            )
+    for cls_c in anchors.get("class_codes", []):
+        if cls_c:
+            store.add_dossier_item(
+                workspace_id=workspace_id,
+                field_key=f"Mã lớp{key_suffix}",
+                field_value=str(cls_c),
+                category="education_career",
+                source_url="user://prompt",
+                note="Tự động lưu từ thông tin đầu vào",
             )
 
     playbook_id = (

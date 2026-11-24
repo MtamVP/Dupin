@@ -21,6 +21,11 @@ import type { DossierItem, Lang, SourceItem, TimelineEvent } from '../types'
 
 interface Props {
   lang: Lang
+  open: boolean
+  width: number
+  isResizing?: boolean
+  onWidthChange: (w: number) => void
+  onStartResize: (e: React.MouseEvent) => void
   workspaceId: string | null
   dossierItems: DossierItem[]
   timelineEvents: TimelineEvent[]
@@ -34,6 +39,11 @@ interface Props {
 
 export function RightPanel({
   lang,
+  open,
+  width,
+  isResizing,
+  onWidthChange,
+  onStartResize,
   workspaceId,
   dossierItems,
   timelineEvents,
@@ -51,6 +61,7 @@ export function RightPanel({
   const [sourceUrl, setSourceUrl] = useState('')
   const [manualNotice, setManualNotice] = useState('')
   const [redactExport, setRedactExport] = useState(false)
+  const [exportFormat, setExportFormat] = useState<'docx' | 'pdf' | 'html' | 'xlsx' | 'obsidian' | 'csv' | 'json' | 'stix'>('docx')
   const [inspectLoading, setInspectLoading] = useState(false)
   const [inspectError, setInspectError] = useState('')
 
@@ -126,87 +137,149 @@ export function RightPanel({
     }
   }
 
-  function triggerExport(kind: 'obsidian' | 'stix' | 'csv') {
+  function triggerExport(kind: 'docx' | 'pdf' | 'html' | 'xlsx' | 'obsidian' | 'csv' | 'json' | 'stix' = exportFormat) {
     if (!workspaceId) return
-    const q = redactExport ? '?redact=true' : ''
-    window.open(`/api/workspaces/${workspaceId}/export/${kind}${kind === 'csv' ? '' : q}`, '_blank')
+    const params = new URLSearchParams({
+      verified_only: 'true',
+      deep_read: 'true',
+    })
+    if (redactExport) params.set('redact', 'true')
+    window.open(`/api/workspaces/${workspaceId}/export/${kind}?${params.toString()}`, '_blank')
   }
 
   return (
     <aside
-      className="flex h-full w-92 shrink-0 flex-col border-l"
-      style={{ background: 'var(--color-canvas)', borderColor: 'var(--color-hairline)' }}
+      className={`${isResizing ? '' : 'agy-sidebar-drawer'} relative flex h-full shrink-0 flex-col border-l`}
+      style={{
+        width: open ? `${width}px` : '0px',
+        opacity: open ? 1 : 0,
+        borderLeftWidth: open ? '1px' : '0px',
+        background: 'var(--color-sidebar)',
+        borderColor: 'var(--color-hairline)',
+      }}
     >
-      {/* Underline Tabs (DESIGN.md: underline tabs, ink active, muted inactive, NO orange/pill) */}
-      <div
-        className="app-chrome flex items-center gap-4 border-b px-4"
-        style={{ borderColor: 'var(--color-hairline)' }}
-      >
-        {(
-          [
-            ['dossier', t.tabDossier(dossierItems.length), BookmarkCheck],
-            ['timeline', t.tabTimeline(timelineEvents.length), Clock],
-            ['inspector', t.tabInspector, Eye],
-          ] as const
-        ).map(([id, label, Icon]) => {
-          const isActive = activeTab === id
-          return (
-            <button
-              key={id}
-              onClick={() => onTabChange(id)}
-              className="flex h-12 items-center gap-1.5 border-b-2 text-[13px] font-medium transition-colors"
-              style={{
-                borderColor: isActive ? 'var(--color-ink)' : 'transparent',
-                color: isActive ? 'var(--color-ink)' : 'var(--color-muted)',
-              }}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{label}</span>
-            </button>
-          )
-        })}
-      </div>
+      {open && (
+        <div
+          onMouseDown={onStartResize}
+          onDoubleClick={() => onWidthChange(368)}
+          className="group absolute top-0 left-0 z-30 h-full w-1.5 cursor-col-resize"
+          title={
+            lang === 'vi'
+              ? 'Kéo để chỉnh độ rộng cột phải (Nháy đúp để về mặc định 368px)'
+              : 'Drag to resize right sidebar (Double-click to reset 368px)'
+          }
+        >
+          <div
+            className="h-full w-[2px] opacity-0 transition-opacity group-hover:opacity-100"
+            style={{ background: 'var(--color-hairline-strong)' }}
+          />
+        </div>
+      )}
+      <div className="flex h-full flex-col" style={{ width: `${width}px` }}>
+        {/* Underline Tabs (DESIGN.md: underline tabs, ink active, muted inactive, NO orange/pill) */}
+        <div
+          className="app-chrome flex items-center gap-4 border-b px-4"
+          style={{ borderColor: 'var(--color-hairline)' }}
+        >
+          {(
+            [
+              ['dossier', t.tabDossier(dossierItems.length), BookmarkCheck],
+              ['timeline', t.tabTimeline(timelineEvents.length), Clock],
+              ['inspector', t.tabInspector, Eye],
+            ] as const
+          ).map(([id, label, Icon]) => {
+            const isActive = activeTab === id
+            return (
+              <button
+                key={id}
+                onClick={() => onTabChange(id)}
+                className="flex h-12 items-center gap-1.5 border-b-2 text-[13px] font-medium transition-colors"
+                style={{
+                  borderColor: isActive ? 'var(--color-ink)' : 'transparent',
+                  color: isActive ? 'var(--color-ink)' : 'var(--color-muted)',
+                }}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{label}</span>
+              </button>
+            )
+          })}
+        </div>
 
       {/* Tab 1: Verified Dossier */}
       {activeTab === 'dossier' && (
         <>
           <div
-            className="app-chrome flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5 text-[12px]"
+            className="app-chrome flex flex-col gap-1.5 border-b px-4 py-2.5 text-[12px]"
             style={{ borderColor: 'var(--color-hairline)' }}
           >
-            <label className="flex cursor-pointer items-center gap-1.5" style={{ color: 'var(--color-body)' }}>
+            <div className="flex w-full items-center gap-2">
+              <select
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}
+                className="h-7 min-w-0 flex-1 border px-2 text-[12px] outline-none"
+                style={{
+                  background: 'var(--color-surface-card)',
+                  borderColor: 'var(--color-hairline)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--color-ink)',
+                }}
+              >
+                <option value="docx" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Word (.docx · Đọc sâu tài liệu)' : 'Word (.docx · Deep Read)'}
+                </option>
+                <option value="pdf" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'PDF (.pdf · Đọc sâu tài liệu)' : 'PDF (.pdf · Deep Read)'}
+                </option>
+                <option value="html" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Báo cáo In / PDF (.html)' : 'Print / PDF Report (.html)'}
+                </option>
+                <option value="xlsx" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Excel (.xlsx · 3 Sheet)' : 'Excel (.xlsx · 3 Sheets)'}
+                </option>
+                <option value="obsidian" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Obsidian (.md · Đọc sâu)' : 'Obsidian (.md · Deep Read)'}
+                </option>
+                <option value="csv" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Bảng CSV (.csv)' : 'CSV Table (.csv)'}
+                </option>
+                <option value="json" style={{ background: 'var(--color-surface-card)' }}>
+                  {lang === 'vi' ? 'Hồ sơ JSON (.json)' : 'Verified JSON (.json)'}
+                </option>
+                <option value="stix" style={{ background: 'var(--color-surface-card)' }}>
+                  STIX 2.1 (.stix.json)
+                </option>
+              </select>
+              <button
+                onClick={() => triggerExport(exportFormat)}
+                className="btn-secondary inline-flex h-7 shrink-0 items-center gap-1 px-2.5 text-[12px]"
+                title={lang === 'vi' ? 'Xuất chỉ các thông tin đã xác nhận' : 'Export verified dossier only'}
+              >
+                <Download className="h-3 w-3" />
+                <span>{lang === 'vi' ? 'Xuất' : 'Export'}</span>
+              </button>
+            </div>
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-[11px]"
+              style={{ color: 'var(--color-muted)' }}
+              title={
+                lang === 'vi'
+                  ? 'Khi bật: che SĐT, Email, Ngày sinh, MSSV (ví dụ 31****09) để chia sẻ báo cáo công khai an toàn. Khi tắt (mặc định): giữ nguyên 100% thông tin thật trong hồ sơ xuất ra.'
+                  : t.redactPiiLabel
+              }
+            >
               <input
                 type="checkbox"
                 checked={redactExport}
                 onChange={(e) => setRedactExport(e.target.checked)}
                 style={{ accentColor: 'var(--color-ink)' }}
               />
-              <span>{t.redactPiiLabel}</span>
+              <span className="truncate">
+                {lang === 'vi'
+                  ? 'Che thông tin nhạy cảm (SĐT/Email/MSSV) khi chia sẻ'
+                  : 'Mask sensitive PII (phone/email/ID) for sharing'}
+              </span>
             </label>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => triggerExport('obsidian')}
-                title={t.exportObsidianTitle}
-                className="btn-secondary inline-flex h-7 items-center gap-1 px-2 text-[12px]"
-              >
-                <Download className="h-3 w-3" />
-                <span>Obsidian</span>
-              </button>
-              <button
-                onClick={() => triggerExport('stix')}
-                title={t.exportStixTitle}
-                className="btn-secondary inline-flex h-7 items-center px-2 text-[12px]"
-              >
-                STIX 2.1
-              </button>
-              <button
-                onClick={() => triggerExport('csv')}
-                title={t.exportCsvTitle}
-                className="btn-secondary inline-flex h-7 items-center px-2 text-[12px]"
-              >
-                CSV
-              </button>
-            </div>
           </div>
 
           <div className="flex-1 space-y-2.5 overflow-y-auto p-4">
@@ -329,7 +402,7 @@ export function RightPanel({
 
           <div
             className="space-y-2 border-t p-4"
-            style={{ borderColor: 'var(--color-hairline)', background: 'var(--color-canvas)' }}
+            style={{ borderColor: 'var(--color-hairline)', background: 'var(--color-sidebar)' }}
           >
             {manualNotice && (
               <div className="text-[12px]" style={{ color: 'var(--color-semantic-error)' }}>
@@ -618,6 +691,7 @@ export function RightPanel({
           )}
         </div>
       )}
+      </div>
     </aside>
   )
 }

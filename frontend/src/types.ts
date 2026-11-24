@@ -5,6 +5,9 @@ export interface Workspace {
   id: string
   name: string
   description: string
+  pinned?: boolean
+  search_summary?: string
+  last_active_at?: string
   created_at: string
 }
 
@@ -76,10 +79,43 @@ export interface GatekeeperStats {
   rejected_by_reason: Record<string, number>
 }
 
+export interface InvestigationBranchNode {
+  branch_id: string
+  parent_id?: string | null
+  depth: number
+  hypothesis_type: string
+  label: string
+  query?: string
+  status: string
+  score: number
+  discovered_facts?: Record<string, unknown>
+  evidence_urls?: string[]
+  conflict_reason?: string
+  children_ids?: string[]
+}
+
+export interface InvestigationTreeTelemetry {
+  activated: boolean
+  activation_reason: string
+  total_branches: number
+  backtracked_count: number
+  pruned_count: number
+  confirmed_expansions?: Array<{
+    branch_id: string
+    full_name: string
+    birth_date?: string
+    class_code?: string
+    score: number
+    corroborating_hits: number
+  }>
+  nodes: InvestigationBranchNode[]
+}
+
 export interface PipelineTelemetry {
   architecture: string
   gatekeeper?: GatekeeperStats
   layer_timings_ms?: Record<string, number>
+  investigation_tree?: InvestigationTreeTelemetry
 }
 
 export interface AssistantPayload {
@@ -90,6 +126,8 @@ export interface AssistantPayload {
   suggested_dorks?: DorkItem[]
   reasoning_steps?: ReasoningStep[]
   learned_negative_keywords?: string[]
+  recommended_pivots?: Array<Record<string, unknown>>
+  hidden_links?: Array<Record<string, unknown>>
   timeline_events?: TimelineEvent[]
   disambiguation_cards?: DisambiguationCard[]
   graph_stats?: { nodes: number; edges: number }
@@ -100,7 +138,10 @@ export interface ChatMessage {
   id?: string
   role: 'user' | 'assistant'
   content: string
-  payload?: AssistantPayload
+  payload?: AssistantPayload & {
+    image_preview_url?: string
+    has_image?: boolean
+  }
   created_at?: string
 }
 
@@ -184,3 +225,42 @@ export interface GeoPoint {
   lng: number
   label: string
 }
+
+export interface GraphFeatureClaim {
+  category: string
+  key: string
+  value: unknown
+  polarity: 'POSITIVE' | 'NEGATIVE'
+  confidence: number
+  source_url: string
+  evidence_quote: string
+}
+
+export interface GraphNodeItem {
+  id: string
+  workspace_id: string
+  type: string
+  label: string
+  normalized_label: string
+  claims: GraphFeatureClaim[]
+  confidence: number
+}
+
+export interface GraphEdgeItem {
+  id: string
+  workspace_id: string
+  source_id: string
+  target_id: string
+  relation: string
+  confidence: number
+  status: string
+  evidence_quote: string
+  source_url: string
+}
+
+export interface GraphSnapshotData {
+  workspace: Workspace
+  nodes: GraphNodeItem[]
+  edges: GraphEdgeItem[]
+}
+

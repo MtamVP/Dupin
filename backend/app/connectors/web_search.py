@@ -353,7 +353,13 @@ async def test_searxng_connection(
     timeout: float = 5.0,
     client: Optional[httpx.AsyncClient] = None,
 ) -> dict[str, Any]:
-    """Probe a local/self-hosted SearXNG instance and verify JSON API availability."""
+    """Probe a local/self-hosted SearXNG instance and verify JSON API availability.
+
+    Automatically falls back to STALKER_SEARXNG_URL (e.g. `http://searxng:8080` inside Docker)
+    or `http://host.docker.internal:8888` when a user supplies `localhost:8888` inside a container.
+    """
+    import os
+
     clean_base = base_url.strip().rstrip("/")
     if not clean_base:
         return {
@@ -365,16 +371,27 @@ async def test_searxng_connection(
             "error": "Chưa nhập URL SearXNG.",
         }
 
-    async def _probe(c: httpx.AsyncClient) -> dict[str, Any]:
+    candidates = [clean_base]
+    if "localhost" in clean_base or "127.0.0.1" in clean_base:
+        env_sx = os.getenv("STALKER_SEARXNG_URL", "").strip().rstrip("/")
+        if env_sx and env_sx not in candidates:
+            candidates.append(env_sx)
+        docker_host_sx = clean_base.replace("localhost", "host.docker.internal").replace(
+            "127.0.0.1", "host.docker.internal"
+        )
+        if docker_host_sx not in candidates:
+            candidates.append(docker_host_sx)
+
+    async def _probe(c: httpx.AsyncClient, url_to_try: str) -> dict[str, Any]:
         resp = await c.get(
-            f"{clean_base}/search",
+            f"{url_to_try}/search",
             params={"q": "wikipedia", "format": "json"},
         )
         if resp.status_code == 403:
             return {
                 "reachable": True,
                 "json_enabled": False,
-                "base_url": clean_base,
+                "base_url": url_to_try,
                 "sample_count": 0,
                 "engines": [],
                 "error": "SearXNG đang chạy nhưng chưa bật format=json (HTTP 403). Hãy thêm 'json' vào search.formats trong searxng/settings.yml.",
@@ -388,7 +405,7 @@ async def test_searxng_connection(
                 return {
                     "reachable": True,
                     "json_enabled": False,
-                    "base_url": clean_base,
+                    "base_url": url_to_try,
                     "sample_count": 0,
                     "engines": [],
                     "error": "SearXNG trả về HTML thay vì JSON. Hãy bật 'json' trong search.formats của settings.yml.",
@@ -403,26 +420,35 @@ async def test_searxng_connection(
         return {
             "reachable": True,
             "json_enabled": True,
-            "base_url": clean_base,
+            "base_url": url_to_try,
             "sample_count": len(items),
             "engines": engines[:10],
             "error": "",
         }
 
-    try:
-        if client is not None:
-            return await _probe(client)
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            return await _probe(c)
-    except Exception as exc:
-        return {
-            "reachable": False,
-            "json_enabled": False,
-            "base_url": clean_base,
-            "sample_count": 0,
-            "engines": [],
-            "error": str(exc),
-        }
+    last_err = ""
+    for cand_url in candidates:
+        try:
+            if client is not None:
+                res = await _probe(client, cand_url)
+            else:
+                async with httpx.AsyncClient(timeout=timeout) as c:
+                    res = await _probe(c, cand_url)
+            if res.get("reachable"):
+                return res
+            last_err = str(res.get("error") or "")
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+
+    return {
+        "reachable": False,
+        "json_enabled": False,
+        "base_url": clean_base,
+        "sample_count": 0,
+        "engines": [],
+        "error": last_err,
+    }
 
 
 _VN_DIACRITIC_RE = re.compile(
@@ -488,21 +514,86 @@ def _sanitize_query_for_serper_free(query: str) -> str:
     return " ".join(tokens).strip()
 
 
+_VN_LOCATION_TO_SERPER: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        (
+            "hà nội", "ha noi", "hanoi", "hust", "neu", "hnue", "vnu", "ptit",
+            "hà nội - amsterdam", "chu văn an", "kim liên", "phan đình phùng",
+            "bách khoa hà nội", "kinh tế quốc dân", "ngoại thương hà nội",
+        ),
+        "Hanoi, Vietnam",
+    ),
+    (
+        (
+            "tp.hcm", "tphcm", "hồ chí minh", "ho chi minh", "sài gòn", "sai gon", "thủ đức",
+            "hcmut", "hcmus", "hcmussh", "ussh", "uit", "ueh", "uel", "ump", "sgu", "tdtu",
+            "hutech", "vlu", "nttu", "hcmute", "nguyễn thượng hiền", "nguyễn gia thiều",
+            "lê hồng phong", "trần đại nghĩa", "nguyễn thị minh khai", "mạc đĩnh chi",
+            "gia định", "bùi thị xuân", "phổ thông năng khiếu", "ptnk", "hcm.edu.vn",
+        ),
+        "Ho Chi Minh City, Vietnam",
+    ),
+    (("đà nẵng", "da nang", "udn.vn"), "Da Nang, Vietnam"),
+    (("cần thơ", "can tho", "ctu.edu.vn"), "Can Tho, Vietnam"),
+    (("hải phòng", "hai phong"), "Hai Phong, Vietnam"),
+    (("huế", "hue", "quốc học huế"), "Hue, Vietnam"),
+    (("phú yên", "phu yen", "tuy hòa", "tuy hoa"), "Phu Yen, Vietnam"),
+    (("khánh hòa", "khanh hoa", "nha trang"), "Nha Trang, Khanh Hoa, Vietnam"),
+    (("đồng nai", "dong nai", "biên hòa", "bien hoa"), "Bien Hoa, Dong Nai, Vietnam"),
+    (("bình dương", "binh duong"), "Thu Dau Mot, Binh Duong, Vietnam"),
+    (("bình định", "binh dinh", "quy nhơn", "quy nhon"), "Quy Nhon, Binh Dinh, Vietnam"),
+    (("lâm đồng", "lam dong", "đà lạt", "da lat"), "Da Lat, Lam Dong, Vietnam"),
+    (("đắk lắk", "dak lak", "buôn ma thuột", "buon ma thuot"), "Buon Ma Thuot, Dak Lak, Vietnam"),
+    (("nghệ an", "nghe an", "vinh"), "Vinh, Nghe An, Vietnam"),
+    (("thanh hóa", "thanh hoa"), "Thanh Hoa, Vietnam"),
+    (("quảng ninh", "quang ninh", "hạ long"), "Ha Long, Quang Ninh, Vietnam"),
+    (("bà rịa", "vũng tàu", "vung tau"), "Vung Tau, Ba Ria - Vung Tau, Vietnam"),
+)
+
+
+def infer_serper_location(query: str, explicit_location: str = "") -> str:
+    """Dynamically infer Google/Serper `location` from explicit location, city, or known school/university in the query.
+
+    Falls back to neutral `'Vietnam'` when no province/city/school region is mentioned so searches for people
+    in Hanoi/Da Nang/Phu Yen are never biased toward HCMC.
+    """
+    if explicit_location.strip():
+        return explicit_location.strip()
+    low = (query or "").lower()
+    for hints, serper_loc in _VN_LOCATION_TO_SERPER:
+        if any(h in low for h in hints):
+            return serper_loc
+    return "Vietnam"
+
+
 class WebSearchConnector(BaseConnector):
     """Live multi-engine public web search: Serper (Google) or Parallel (SearXNG Local + ddgs) with Consensus Fusion."""
 
     DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 
     async def _search_serper(
-        self, query: str, api_key: str, max_results: int = 8, region: str = "global"
+        self,
+        query: str,
+        api_key: str,
+        max_results: int = 8,
+        region: str = "global",
+        location: str = "",
     ) -> list[dict[str, Any]]:
-        """Query Google Search via Serper.dev JSON API using rotated key."""
-        body: dict[str, Any] = {"q": query, "num": max_results}
+        """Query Google Search via Serper.dev JSON API using rotated key.
+
+        Note: Serper Free accounts strictly cap `num <= 10` (values > 10 return HTTP 400
+        'Query pattern not allowed for free accounts.').
+        """
+        safe_num = max(1, min(int(max_results), 10))
+        body: dict[str, Any] = {"q": query, "num": safe_num}
         if region == "vn":
             body["gl"] = "vn"
             body["hl"] = "vi"
+            body["location"] = infer_serper_location(query, location)
         else:
             body["hl"] = "en"
+            if location:
+                body["location"] = location
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             resp = await c.post(
                 "https://google.serper.dev/search",
@@ -591,14 +682,26 @@ class WebSearchConnector(BaseConnector):
             results: list[dict[str, Any]] = self._parse_ddg_html(body)
             engines_used = ["mock_ddg"]
         else:
+            import os
             from app.core.key_pool import IntegrationStore
 
-            int_store = IntegrationStore(self.db_path)
-            local_cfg = int_store.get_local_config()
-            sx_url = local_cfg.searxng_url.strip()
+            int_store: Optional[IntegrationStore] = None
+            sx_url = ""
+            try:
+                int_store = IntegrationStore(self.db_path)
+                local_cfg = int_store.get_local_config()
+                sx_url = local_cfg.searxng_url.strip()
+            except Exception:
+                sx_url = ""
+            env_sx = os.getenv("STALKER_SEARXNG_URL", "").strip()
+            if env_sx and (not sx_url or "127.0.0.1" in sx_url or "localhost" in sx_url):
+                sx_url = env_sx
             cache_key_url = f"search://multi?q={quote_plus(query)}&sx={1 if sx_url else 0}&reg={resolved_region}"
 
-            cached_row = self._get_cached(cache_key_url)
+            try:
+                cached_row = self._get_cached(cache_key_url)
+            except Exception:
+                cached_row = None
             if cached_row is not None and cached_row[1] == 200:
                 results = json.loads(cached_row[0])
                 status, cached = 200, True
@@ -606,13 +709,44 @@ class WebSearchConnector(BaseConnector):
             else:
                 results = []
 
-                # Priority 1: Rotated Serper.dev Google Search key if configured
-                serper_key = int_store.acquire_key("serper")
+                # Priority 1: Rotated Serper.dev Google Search key if configured.
+                # When Serper responds with HTTP 200 (even with 0 organic hits for an ultra-narrow query),
+                # skip SearXNG and ddgs completely so results stay clean and free of metasearch noise overload.
+                serper_succeeded = False
+                try:
+                    serper_key = int_store.acquire_key("serper") if int_store is not None else None
+                except Exception:
+                    serper_key = None
                 if serper_key:
+                    # Proactively pre-sanitize queries containing dork operators or 2+ quoted phrases
+                    # so Serper Free succeeds in a single HTTP request (no HTTP 400 retry or rate-limit burst).
+                    needs_serper_sanitize = (
+                        query.count('"') >= 4
+                        or bool(
+                            re.search(
+                                r"\b(?:site|filetype|ext|inurl|intitle|intext|OR|AND)\b",
+                                query,
+                                flags=re.IGNORECASE,
+                            )
+                        )
+                    )
+                    serper_q = _sanitize_query_for_serper_free(query) if needs_serper_sanitize else query
                     try:
                         results = await self._search_serper(
-                            query, serper_key["api_key"], max_results, region=resolved_region
+                            serper_q or query, serper_key["api_key"], max_results, region=resolved_region
                         )
+                        # If an exact-quoted query returned 0 hits (e.g. HTML table splits "Huỳnh Nguyễn" and "Thuận"
+                        # across separate <td> cells), retry once with quotes stripped on Serper!
+                        if not results and '"' in (serper_q or query):
+                            unquoted_q = re.sub(r"\s+", " ", (serper_q or query).replace('"', " ")).strip()
+                            if unquoted_q and unquoted_q != (serper_q or query):
+                                try:
+                                    results = await self._search_serper(
+                                        unquoted_q, serper_key["api_key"], max_results, region=resolved_region
+                                    )
+                                except Exception:
+                                    pass
+                        serper_succeeded = True
                         if results:
                             engines_used.append("serper")
                     except httpx.HTTPStatusError as exc:
@@ -621,7 +755,7 @@ class WebSearchConnector(BaseConnector):
                         # without penalizing the key's error_count!
                         if exc.response.status_code == 400:
                             clean_serper_q = _sanitize_query_for_serper_free(query)
-                            if clean_serper_q and clean_serper_q != query:
+                            if clean_serper_q and clean_serper_q != serper_q:
                                 try:
                                     results = await self._search_serper(
                                         clean_serper_q,
@@ -629,28 +763,56 @@ class WebSearchConnector(BaseConnector):
                                         max_results,
                                         region=resolved_region,
                                     )
+                                    serper_succeeded = True
                                     if results:
                                         engines_used.append("serper")
                                 except httpx.HTTPStatusError as exc2:
-                                    int_store.report_key_error(
-                                        serper_key["id"],
-                                        is_rate_limit=(exc2.response.status_code == 429),
-                                    )
+                                    if exc2.response.status_code == 429:
+                                        await asyncio.sleep(0.6)
+                                        try:
+                                            results = await self._search_serper(
+                                                clean_serper_q,
+                                                serper_key["api_key"],
+                                                max_results,
+                                                region=resolved_region,
+                                            )
+                                            serper_succeeded = True
+                                            if results:
+                                                engines_used.append("serper")
+                                        except Exception:
+                                            pass
                                 except Exception:
-                                    int_store.report_key_error(serper_key["id"], is_rate_limit=False)
-                            else:
-                                int_store.report_key_error(serper_key["id"], is_rate_limit=False)
+                                    pass
+                        elif exc.response.status_code == 429:
+                            # Brief backoff + 1 retry on concurrent burst before short 8s cooldown
+                            await asyncio.sleep(0.6)
+                            try:
+                                results = await self._search_serper(
+                                    _sanitize_query_for_serper_free(query) or query,
+                                    serper_key["api_key"],
+                                    max_results,
+                                    region=resolved_region,
+                                )
+                                serper_succeeded = True
+                                if results:
+                                    engines_used.append("serper")
+                            except Exception:
+                                try:
+                                    int_store.report_key_error(serper_key["id"], is_rate_limit=True, cooldown_sec=8.0)
+                                except Exception:
+                                    pass
                         else:
-                            int_store.report_key_error(
-                                serper_key["id"], is_rate_limit=(exc.response.status_code == 429)
-                            )
+                            try:
+                                int_store.report_key_error(serper_key["id"], is_rate_limit=False)
+                            except Exception:
+                                pass
                     except Exception:
-                        int_store.report_key_error(serper_key["id"], is_rate_limit=False)
+                        pass
 
-                # Priority 2: Parallel Local SearXNG + Parallel-Race ddgs (yahoo || brave || ddg)
+                # Priority 2 (Fallback ONLY when Serper is unavailable/failed): Parallel Local SearXNG + ddgs
                 ddgs_timed_out = False
                 ddgs_reg = "vn-vi" if resolved_region == "vn" else "wt-wt"
-                if not results:
+                if not results and not serper_succeeded:
                     if sx_url:
                         sx_raw, ddgs_raw = await asyncio.gather(
                             asyncio.wait_for(
@@ -700,7 +862,10 @@ class WebSearchConnector(BaseConnector):
                 status, cached = (200 if results else 204), False
                 # Do not poison 24h http_cache with degraded partial results when ddgs timed out
                 if results and not ddgs_timed_out:
-                    self._set_cached(cache_key_url, json.dumps(results, ensure_ascii=False), 200)
+                    try:
+                        self._set_cached(cache_key_url, json.dumps(results, ensure_ascii=False), 200)
+                    except Exception:
+                        pass
 
         consensus_hits = sum(1 for r in results if int(r.get("consensus_score", 0)) >= 3)
         links = [r["url"] for r in results]

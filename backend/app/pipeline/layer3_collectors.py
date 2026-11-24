@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -22,6 +23,7 @@ import httpx
 
 from app.agents.blackboard import InvestigationBlackboard
 from app.config import settings
+from app.connectors.doc_mirror_reader import fetch_and_inspect_doc_mirror, is_doc_mirror_url
 from app.connectors.document_reader import fetch_and_inspect_document, is_inspectable_document_url
 from app.connectors.github_api import GitHubPublicConnector
 from app.connectors.global_intel import (
@@ -47,8 +49,11 @@ from app.plugins.base import OSINTEvent
 from app.plugins.registry import PluginRegistry
 
 
-def build_intersection_queries(parsed: dict[str, Any]) -> list[dict[str, str]]:
-    """Build exact-name + clue intersection queries prioritizing highest-entropy anchors (exact DOB, orgs)."""
+def build_intersection_queries(
+    parsed: dict[str, Any],
+    phone_candidates: Optional[list[str]] = None,
+) -> list[dict[str, str]]:
+    """Build exact-name + clue intersection queries prioritizing highest-entropy anchors (phone, exact DOB, orgs)."""
     name = parsed["target_name"]
     no_accent = strip_vietnamese_accents(name)
     neg_str = " ".join(f'-"{n}"' for n in parsed.get("negative_keywords", []))
@@ -60,6 +65,28 @@ def build_intersection_queries(parsed: dict[str, Any]) -> list[dict[str, str]]:
     related = parsed.get("related_people", [])
     dob = parsed.get("birth_date", "")
     byear = parsed.get("birth_year")
+    phones = list(phone_candidates or parsed.get("phone_candidates") or [])
+
+    # 0a. Highest-Entropy Phone Anchor Queries (e.g. "Nguyễn Văn Mẫu" 0901234567 & "0901234567")
+    for raw_ph in phones[:1]:
+        digits = re.sub(r"\D+", "", str(raw_ph or ""))
+        if digits.startswith("84") and len(digits) == 11:
+            digits = "0" + digits[2:]
+        if len(digits) >= 9:
+            name_digits = re.sub(r"\D+", "", name)
+            if name and name_digits != digits:
+                queries.append(
+                    {
+                        "strategy": "intersect_name_phone",
+                        "query": f'"{name}" {digits} {neg_str}'.strip(),
+                    }
+                )
+            queries.append(
+                {
+                    "strategy": "exact_phone_digits",
+                    "query": f'"{digits}" {neg_str}'.strip(),
+                }
+            )
 
     # 0. Relational Intersection Queries (e.g. "Nguyễn Minh An" + "Nguyễn Văn Bình")
     for rp in related[:2]:
@@ -101,12 +128,16 @@ def build_intersection_queries(parsed: dict[str, Any]) -> list[dict[str, str]]:
     )
 
     # 1. Highest-Entropy Priority: Exact Name + Exact Full DOB (DD/MM/YYYY) (+ Org)
+    # Include BOTH quoted AND natural unquoted query because Vietnamese school HTML tables
+    # often split surname/given name across columns (`<td>Huỳnh Nguyễn</td><td>Thuận</td>`)!
     if dob:
         if short_org_hint:
-            q_dob_org = f'"{name}" "{dob}" {short_org_hint} {neg_str}'.strip()
+            q_dob_org = f'"{name}" {dob} {short_org_hint} {neg_str}'.strip()
             queries.append({"strategy": "intersect_dob_org", "query": q_dob_org})
-        q_dob = f'"{name}" "{dob}" {neg_str}'.strip()
+        q_dob = f'"{name}" {dob} {neg_str}'.strip()
         queries.append({"strategy": "intersect_exact_dob", "query": q_dob})
+        q_dob_nat = f"{name} {dob} {neg_str}".strip()
+        queries.append({"strategy": "natural_name_dob", "query": q_dob_nat})
 
     # 2. Exact Name + EACH Organization/School separately + natural unquoted query
     for org in orgs[:3]:
@@ -163,7 +194,7 @@ async def run_layer3_collectors(
     region = ctx.region
 
     bundle = CollectionBundle(
-        intersection_queries=build_intersection_queries(parsed),
+        intersection_queries=build_intersection_queries(parsed, phone_candidates=ctx.phone_candidates),
         mirror_queries=build_mirror_pivot_queries(parsed, anchors, region=region),
     )
 
@@ -245,14 +276,23 @@ async def run_layer3_collectors(
             "liệt kê chính xác Tên tài liệu, Mã ID tài liệu, Số hiệu văn bản (nếu có) và gợi ý bước tra cứu tiếp theo."
         )
         fallback_models = [
-            "gemini-3.5-flash-lite",
             "gemini-4-hydrogen",
-            "gemini-3.6-flash",
-            "gemini-3.1-flash-lite",
             "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
         ]
-        for attempt in range(3):
+        # Rotate across ALL configured Gemini keys (up to 6) without repeating a key in the same turn
+        active_gemini_keys = [k for k in int_store.list_keys("gemini") if k.get("enabled")]
+        max_key_attempts = max(3, min(len(active_gemini_keys), 8))
+        tried_key_ids: set[str] = set()
+        for attempt in range(max_key_attempts):
             pool_key = int_store.acquire_key("gemini")
+            if pool_key and pool_key["id"] in tried_key_ids:
+                # Already tried this key in this turn (all other keys may be in cooldown) -> stop looping
+                break
+            if pool_key:
+                tried_key_ids.add(pool_key["id"])
             api_key_to_use = pool_key["api_key"] if pool_key else (settings.gemini_api_key if attempt == 0 else "")
             requested_model = (
                 model_override
@@ -457,6 +497,7 @@ async def run_layer3_collectors(
         # ------------------------------------------------------------------
         # Stage 3E: Concurrent Cross-Clue Search -> Mirror Pivots -> Adaptive Pivot -> Deep Document Reader
         # ------------------------------------------------------------------
+        stage3e_start = time.perf_counter()
         ws_conn = WebSearchConnector(store.db_path)
         search_sem = asyncio.Semaphore(2)
 
@@ -475,15 +516,28 @@ async def run_layer3_collectors(
                 "mirror:student_id_exact",
                 "mirror:scribd_student_id",
                 "mirror:org_domain_portal",
+                "mirror:tax_id_exact",
+                "mirror:exam_id_exact",
+                "mirror:orcid_exact",
+                "mirror:public_id_exact",
+                "mirror:studocu_year",
             )
-        ][:3]
+        ][:2]
         seen_q_strings: set[str] = set()
         r1_queries: list[dict[str, str]] = []
-        for q_obj in priority_id_queries + bundle.intersection_queries:
+        # Always guarantee natural_name_dob (critical for split-column Vietnamese HTML tables)
+        # and the primary org from the user's current prompt are never crowded out by ID queries!
+        guaranteed_intersections = [
+            q_obj
+            for q_obj in bundle.intersection_queries
+            if q_obj["strategy"] == "natural_name_dob"
+            or q_obj["strategy"].startswith("intersect_org:")
+        ][:2]
+        for q_obj in priority_id_queries + guaranteed_intersections + bundle.intersection_queries:
             if q_obj["query"] not in seen_q_strings:
                 seen_q_strings.add(q_obj["query"])
                 r1_queries.append(q_obj)
-            if len(r1_queries) >= 5:
+            if len(r1_queries) >= 6:
                 break
 
         target_sid_tokens = [s["student_id"].lower() for s in anchors.get("student_ids", [])]
@@ -500,7 +554,7 @@ async def run_layer3_collectors(
         ]
 
         r1_docs = await asyncio.gather(
-            *(_bounded_collect(q_obj["query"], 14) for q_obj in r1_queries),
+            *(_bounded_collect(q_obj["query"], 22) for q_obj in r1_queries),
             return_exceptions=True,
         )
         for q_obj, ws_doc in zip(r1_queries, r1_docs):
@@ -548,7 +602,7 @@ async def run_layer3_collectors(
 
             r2_queries = [mq for mq in bundle.mirror_queries if mq["query"] not in seen_q_strings][:5]
             r2_docs = await asyncio.gather(
-                *(_bounded_collect(mq["query"], 12) for mq in r2_queries),
+                *(_bounded_collect(mq["query"], 20) for mq in r2_queries),
                 return_exceptions=True,
             )
 
@@ -611,10 +665,42 @@ async def run_layer3_collectors(
                         mirror_boost_label="Khớp chỉ mục MSSV trong tài liệu" if is_exact_id_mirror else "",
                     )
 
+            # Autonomous Roster-Row Promotion: when Round 1/2 discovers an exact "<Name> <DD/MM/YYYY> [Nam/Nữ] <MSSV>" row,
+            # lock the target's exact DOB and MSSV into anchors & relevant_docs so ReaderAgent never confuses adjacent rows.
+            existing_sids = {s.get("student_id") for s in anchors.get("student_ids", [])}
+            for src in list(gatekeeper.ranked_sources):
+                for clue_lbl in src.get("matched_clues") or []:
+                    m_rl = re.match(r"^Dòng danh sách:\s*(\d{1,2}/\d{1,2}/\d{4})\s*·\s*MSSV\s*(\d{7,12})$", str(clue_lbl))
+                    if m_rl:
+                        r_dob, r_sid = m_rl.group(1), m_rl.group(2)
+                        if not parsed.get("birth_date"):
+                            parsed["birth_date"] = r_dob
+                        if r_sid not in existing_sids:
+                            existing_sids.add(r_sid)
+                            dec_sid = decode_high_entropy_anchors(r_sid).get("student_ids") or [{"student_id": r_sid}]
+                            anchors.setdefault("student_ids", []).extend(dec_sid)
+                            gatekeeper.relevant_docs.insert(
+                                0,
+                                {
+                                    "text": f"Họ và tên: {target_name}. Ngày sinh: {r_dob}. MSSV: {r_sid}.",
+                                    "source_url": src["url"],
+                                },
+                            )
+                            bb.log(
+                                "PlannerAgent",
+                                "ROSTER_ROW_LOCKED",
+                                f"Khóa chính xác dòng danh sách của {target_name}: Ngày sinh {r_dob} · MSSV {r_sid} ({src['url']})",
+                            )
+
             # Adaptive Pivot Chaining: auto-enrich discovered GitHub handles
             if client is None:
                 known_aliases_low = {a.lower() for a in parsed.get("aliases", [])}
                 for src in list(gatekeeper.ranked_sources):
+                    if int(src.get("match_score", 0)) < 1 or any(
+                        w in (src.get("matched_clues") or [])
+                        for w in ("Nghi thừa tên chính", "Nghi khác họ đệm", "Khác dấu tên")
+                    ):
+                        continue
                     m_gh = re.match(r"^https?://(?:www\.)?github\.com/([A-Za-z0-9_-]{2,39})/?$", src["url"])
                     if m_gh:
                         new_handle = m_gh.group(1)
@@ -641,14 +727,17 @@ async def run_layer3_collectors(
                                 pass
                             break
 
-            # Deep-fetch top 2 highest-scoring discovered PDFs/XLSX or institutional documents
+            # Deep-fetch top 3 highest-scoring discovered PDFs/XLSX, Scribd/Studocu mirrors, or institutional documents
             fetcher = PublicWebFetcher(store.db_path)
             fetched_deep = 0
             pdf_terms = [target_name] + [s["student_id"] for s in anchors.get("student_ids", [])]
             if parsed.get("birth_date"):
                 pdf_terms.append(parsed["birth_date"])
+            for raw_ph in (parsed.get("phone_candidates") or [])[:2]:
+                if raw_ph:
+                    pdf_terms.append(str(raw_ph))
             for src in sorted(gatekeeper.ranked_sources, key=lambda s: s.get("match_score", 0), reverse=True):
-                if fetched_deep >= 2:
+                if fetched_deep >= 3:
                     break
                 if src.get("match_score", 0) < 1:
                     continue
@@ -683,6 +772,48 @@ async def run_layer3_collectors(
                                 bb.log("ReaderAgent", "DEEP_PDF_SCANNED", f"PDF {s_url} là bản scan ảnh (không có lớp text) -> dùng snippet chỉ mục.")
                     except Exception:
                         continue
+                elif is_doc_mirror_url(s_url):
+                    try:
+                        mirror_res = await fetch_and_inspect_doc_mirror(
+                            s_url, target_terms=pdf_terms, timeout=8.0, client=client
+                        )
+                        if mirror_res.get("ok"):
+                            fetched_deep += 1
+                            m_meta = mirror_res.get("metadata") or {}
+                            m_platform = str(m_meta.get("platform") or "mirror").capitalize()
+                            excerpts = mirror_res.get("excerpts") or []
+                            src["deep_inspected"] = True
+                            src["doc_type"] = mirror_res.get("doc_type", "doc_mirror")
+                            src["mirror_metadata"] = m_meta
+                            if excerpts:
+                                src["pdf_excerpts"] = excerpts
+                                merged_ex = " | ".join(ex["line"] for ex in excerpts[:3])
+                                src["snippet"] = (
+                                    merged_ex[:280] if len(merged_ex) > len(src.get("snippet", "")) else src["snippet"]
+                                )
+                                src["match_score"] = int(src.get("match_score", 0)) + 2
+                                badge = f"{m_platform} Đọc sâu"
+                                if badge not in src.get("matched_clues", []):
+                                    src.setdefault("matched_clues", []).append(badge)
+                            public_summary = str(mirror_res.get("public_text_summary") or "")
+                            if public_summary:
+                                gatekeeper.relevant_docs.append({"text": public_summary[:2500], "source_url": s_url})
+                            m_anchors = mirror_res.get("discovered_anchors") or {}
+                            for dno in m_anchors.get("doc_numbers", []):
+                                if dno not in anchors["doc_numbers"]:
+                                    anchors["doc_numbers"].append(dno)
+                            meta_bits = [
+                                b for b in (m_meta.get("university"), m_meta.get("course"), m_meta.get("author")) if b
+                            ]
+                            bb.log(
+                                "ReaderAgent",
+                                "DEEP_MIRROR_EXTRACT",
+                                f"Đọc sâu {m_platform} ({mirror_res.get('fetch_source', 'public')}) {s_url} -> "
+                                f"{len(excerpts)} dòng khớp"
+                                + (f" · Metadata: {' | '.join(meta_bits[:3])}" if meta_bits else ""),
+                            )
+                    except Exception:
+                        continue
                 elif any(k in s_url.lower() for k in ("/document/", ".edu.vn", "github.com")):
                     try:
                         p_doc = await fetcher.collect(s_url, client=client)
@@ -697,6 +828,40 @@ async def run_layer3_collectors(
                                     bb.log("ReaderAgent", "DEEP_FETCH_ANCHOR", f"Đọc trang {s_url} -> phát hiện văn bản {dno}")
                     except Exception:
                         continue
+
+            # Adaptive Divide-and-Conquer & Branch-and-Bound Investigation Tree (activates only when direct evidence is sparse/incomplete)
+            # Respect wall-clock budget: if Stage 3E already spent > 40s and already collected sources, skip slow lateral tree.
+            has_strong_phone_or_id_hit = any(
+                any(lbl in ("Khớp SĐT", "Khớp chỉ mục MSSV trong tài liệu") or lbl.startswith("MSSV:") for lbl in (s.get("matched_clues") or []))
+                for s in gatekeeper.ranked_sources
+            )
+            stage3e_elapsed = time.perf_counter() - stage3e_start
+            if stage3e_elapsed < 40.0 and not has_strong_phone_or_id_hit:
+                from app.pipeline.investigation_tree import InvestigationTree
+
+                tree = InvestigationTree(
+                    root_label=target_name,
+                    seed_facts={
+                        "target_name": target_name,
+                        "birth_date": parsed.get("birth_date", ""),
+                        "birth_year": parsed.get("birth_year"),
+                        "organizations": list(parsed.get("organizations") or []),
+                        "locations": list(parsed.get("locations") or []),
+                    },
+                )
+                bundle.investigation_tree = await tree.run_recursive_search(
+                    ctx=ctx,
+                    gatekeeper=gatekeeper,
+                    ws_conn=ws_conn,
+                    bb=bb,
+                    client=client,
+                )
+            else:
+                bundle.investigation_tree = {
+                    "activated": False,
+                    "reason": "strong_anchor_already_found" if has_strong_phone_or_id_hit else "stage3e_time_budget_reached",
+                    "branches": [],
+                }
 
     # Finalize Layer 2 Gatekeeper ranking & pruning before handing off to Layer 4 Deep Core!
     ranked_sources, relevant_docs = gatekeeper.finalize_and_prune()

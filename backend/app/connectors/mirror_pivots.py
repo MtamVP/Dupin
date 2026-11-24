@@ -280,6 +280,26 @@ def build_mirror_pivot_queries(
             }
         )
 
+    # 4b. High-entropy public ID pivots (Tax ID / MST, Exam ID / SBD, ORCID, Public Gazette CCCD, License Plate, Wallet)
+    for mst in anchors.get("tax_ids", [])[:2]:
+        queries.append({"strategy": "mirror:tax_id_exact", "query": f'"{mst}" {name}'.strip()})
+        if resolved_region == "vn":
+            queries.append({"strategy": "mirror:masothue_pivot", "query": f'site:masothue.com "{mst}"'})
+    for sbd in anchors.get("exam_ids", [])[:2]:
+        queries.append({"strategy": "mirror:exam_id_exact", "query": f'"{sbd}" {name}'.strip()})
+    for orcid in anchors.get("orcid_ids", [])[:2]:
+        queries.append({"strategy": "mirror:orcid_exact", "query": f'"{orcid}"'})
+    for c_obj in anchors.get("cccds", [])[:1]:
+        c_val = str(c_obj.get("cccd") or "").strip()
+        if c_val:
+            queries.append({"strategy": "mirror:public_id_exact", "query": f'"{c_val}" {name}'.strip()})
+    for lp_obj in anchors.get("license_plates", [])[:1]:
+        lp_val = str(lp_obj.get("plate") or "").strip()
+        if lp_val:
+            queries.append({"strategy": "mirror:license_plate_exact", "query": f'"{lp_val}"'})
+    for wallet in anchors.get("crypto_wallets", [])[:1]:
+        queries.append({"strategy": "mirror:crypto_wallet_exact", "query": f'"{wallet}"'})
+
     # 5. Region-aware Public Registry, Academic, Relational PDF & Profile Mirrors
     dob = parsed.get("birth_date", "")
     related_people = parsed.get("related_people") or []
@@ -300,11 +320,25 @@ def build_mirror_pivot_queries(
                     }
                 )
     if resolved_region == "vn":
+        byear = parsed.get("birth_year")
         if name and dob:
             queries.append(
                 {
                     "strategy": "mirror:edu_vn_exact_dob",
                     "query": f'site:edu.vn "{name}" "{dob}" {neg_str}'.strip(),
+                }
+            )
+        if name and byear:
+            queries.append(
+                {
+                    "strategy": "mirror:studocu_year",
+                    "query": f'"{name}" "{byear}" studocu {neg_str}'.strip(),
+                }
+            )
+            queries.append(
+                {
+                    "strategy": "mirror:scribd_year",
+                    "query": f'"{name}" "{byear}" scribd {neg_str}'.strip(),
                 }
             )
         if name and primary_org:
@@ -340,6 +374,18 @@ def build_mirror_pivot_queries(
                     "query": f'site:studocu.com/vn/document "{name}" "{primary_org}" {neg_str}'.strip(),
                 }
             )
+            queries.append(
+                {
+                    "strategy": "mirror:studocu_vn_name",
+                    "query": f'"{name}" studocu {primary_org} {neg_str}'.strip(),
+                }
+            )
+            queries.append(
+                {
+                    "strategy": "mirror:scribd_org_name",
+                    "query": f'"{name}" "{primary_org}" scribd {neg_str}'.strip(),
+                }
+            )
         elif name and len(name.split()) >= 3:
             queries.append(
                 {
@@ -347,6 +393,37 @@ def build_mirror_pivot_queries(
                     "query": f'"{name}" filetype:pdf {neg_str}'.strip(),
                 }
             )
+            queries.append(
+                {
+                    "strategy": "mirror:scribd_name_only",
+                    "query": f'"{name}" scribd {neg_str}'.strip(),
+                }
+            )
+            queries.append(
+                {
+                    "strategy": "mirror:studocu_name_only",
+                    "query": f'"{name}" studocu {neg_str}'.strip(),
+                }
+            )
+
+        # Additive Scribd/Studocu phone-list pivots when phone_candidates exist
+        for raw_ph in (parsed.get("phone_candidates") or [])[:1]:
+            ph_digits = re.sub(r"\D+", "", str(raw_ph or ""))
+            if ph_digits.startswith("84") and len(ph_digits) == 11:
+                ph_digits = "0" + ph_digits[2:]
+            if len(ph_digits) >= 9:
+                queries.append(
+                    {
+                        "strategy": "mirror:scribd_phone",
+                        "query": f'"{ph_digits}" scribd',
+                    }
+                )
+                queries.append(
+                    {
+                        "strategy": "mirror:studocu_phone",
+                        "query": f'"{ph_digits}" studocu',
+                    }
+                )
     else:
         # Global strategy: LinkedIn, GitHub, ORCID/Scholar, global .edu/.ac, and public PDF CV/papers
         org_q = f'"{primary_org}"' if primary_org else ""

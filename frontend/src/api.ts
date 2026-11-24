@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   DossierItem,
   GeoPoint,
+  GraphSnapshotData,
   LocalHostConfig,
   PipelineArchitectureInfo,
   PluginInfo,
@@ -33,11 +34,29 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     }),
+  pinWorkspace: (id: string, pinned: boolean) =>
+    jsonFetch<Workspace>(`/api/workspaces/${id}/pin`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }),
   deleteWorkspace: (id: string) =>
     jsonFetch<{ deleted: boolean }>(`/api/workspaces/${id}`, { method: 'DELETE' }),
 
   listMessages: (workspaceId: string) =>
     jsonFetch<{ messages: ChatMessage[] }>(`/api/workspaces/${workspaceId}/messages`),
+
+  getGraphSnapshot: (workspaceId: string) =>
+    jsonFetch<GraphSnapshotData>(`/api/workspaces/${workspaceId}/graph`),
+  deleteGraphNode: (nodeId: string) =>
+    jsonFetch<{ deleted: boolean; id: string }>(`/api/nodes/${nodeId}`, { method: 'DELETE' }),
+  deleteGraphNodeClaim: (nodeId: string, key: string, value: string) =>
+    jsonFetch<unknown>(
+      `/api/nodes/${nodeId}/claims?key=${encodeURIComponent(key)}&value=${encodeURIComponent(value)}`,
+      { method: 'DELETE' },
+    ),
+  deleteGraphEdge: (edgeId: string) =>
+    jsonFetch<{ deleted: boolean; id: string }>(`/api/edges/${edgeId}`, { method: 'DELETE' }),
 
   listDossier: (workspaceId: string) =>
     jsonFetch<{ items: DossierItem[] }>(`/api/workspaces/${workspaceId}/dossier`),
@@ -58,6 +77,35 @@ export const api = {
     }),
   deleteDossier: (itemId: string) =>
     jsonFetch<{ deleted: boolean }>(`/api/dossier/${itemId}`, { method: 'DELETE' }),
+
+  listSourceFeedback: (workspaceId: string) =>
+    jsonFetch<{
+      items: Array<{
+        id: string
+        workspace_id: string
+        source_url: string
+        normalized_url: string
+        title: string
+        verdict: 'REJECTED' | 'CONFIRMED'
+      }>
+    }>(`/api/workspaces/${workspaceId}/source-feedback`),
+  addSourceFeedback: (
+    workspaceId: string,
+    payload: { source_url: string; verdict: 'REJECTED' | 'CONFIRMED'; title?: string },
+  ) =>
+    jsonFetch<{ id: string; source_url: string; verdict: 'REJECTED' | 'CONFIRMED' }>(
+      `/api/workspaces/${workspaceId}/source-feedback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+  removeSourceFeedback: (workspaceId: string, sourceUrl: string) =>
+    jsonFetch<{ deleted: boolean }>(
+      `/api/workspaces/${workspaceId}/source-feedback?source_url=${encodeURIComponent(sourceUrl)}`,
+      { method: 'DELETE' },
+    ),
 
   listKeys: () => jsonFetch<{ keys: APIKeyItem[] }>('/api/integrations/keys'),
   addKey: (payload: { name: string; provider: string; api_key: string; model?: string }) =>
@@ -126,6 +174,32 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, target_terms }),
+    }),
+
+  extractLocalFile: (filename: string, content_b64: string) =>
+    jsonFetch<{
+      ok: boolean
+      filename: string
+      doc_type: string
+      extracted_text: string
+      summary?: string
+      error?: string
+    }>('/api/tools/extract-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, content_b64 }),
+    }),
+
+  extractImageExif: (filename: string, content_b64: string) =>
+    jsonFetch<{
+      has_exif: boolean
+      summary_text: string
+      gps_lat?: number
+      gps_lng?: number
+    }>('/api/tools/extract-image-exif', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, content_b64 }),
     }),
 
   streamChat: async (

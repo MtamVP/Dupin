@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 import httpx
@@ -62,57 +63,111 @@ async def run_layer5_synthesis(
     local_cfg = int_store.get_local_config()
 
     if live_search and not google_ai_summary and ranked_sources and local_cfg.active_mode in ("auto", "gemini_pool"):
-        synth_key_obj = int_store.acquire_key("gemini")
-        synth_key = synth_key_obj["api_key"] if synth_key_obj else settings.gemini_api_key
-        synth_model = model_override or settings.gemini_model
-        if synth_key:
-            src_digest = "\n".join(f"- {s['title']} ({s['url']}): {s['snippet']}" for s in ranked_sources[:8])
-            rel_desc = ", ".join(
-                f"{rp.get('relation', 'RELATED_TO')} -> {rp.get('name', '')}"
-                for rp in parsed.get("related_people", [])
-                if rp.get("name")
+        src_digest = "\n".join(f"- {s['title']} ({s['url']}): {s['snippet']}" for s in ranked_sources[:8])
+        rel_desc = ", ".join(
+            f"{rp.get('relation', 'RELATED_TO')} -> {rp.get('name', '')}"
+            for rp in parsed.get("related_people", [])
+            if rp.get("name")
+        )
+        tree_info = bundle.investigation_tree or {}
+        tree_summary = ""
+        if tree_info.get("activated"):
+            tree_lines = [
+                f"  - [{n['branch_id']} | d={n['depth']} | {n['status']} | score={n['score']}] {n['label']}"
+                + (f" (reason: {n['conflict_reason']})" if n.get("conflict_reason") else "")
+                for n in (tree_info.get("nodes") or [])[:10]
+            ]
+            tree_summary = "\nDivide-and-Conquer Decision Tree:\n" + "\n".join(tree_lines) + "\n"
+        dossier_section = (
+            f"\nDỮ LIỆU ĐÃ XÁC NHẬN TRONG HỒ SƠ (Ground Truth — ƯU TIÊN TUYỆT ĐỐI):\n{ctx.dossier_blob[:1600]}\n"
+            if ctx.dossier_blob
+            else ""
+        )
+        if region == "global":
+            synth_prompt = (
+                f"Analyze public OSINT findings for primary target '{target_name}'.\n"
+                f"Known clues: DOB={parsed['birth_date'] or parsed['birth_year']}, "
+                f"organizations={parsed['organizations']}, locations={parsed['locations']}, "
+                f"related_people=[{rel_desc or 'none'}], "
+                f"IDs={[s['student_id'] for s in anchors.get('student_ids', [])]}.{tree_summary}{dossier_section}\n"
+                f"Collected public sources:\n{src_digest}\n\n"
+                "CRITICAL RULE: Never confuse biographical attributes (birth year, title, employer) of a related person "
+                "(parent/spouse/sibling) with those of the primary target. Always respect Ground Truth in Verified Dossier.\n"
+                "Summarize concisely in English with clean Markdown headings: "
+                "(1) Most authoritative sources and verified facts, "
+                "(2) Current entity resolution & uncertainty assessment (no fabrication), "
+                "(3) Recommended next public OSINT pivots."
             )
-            if region == "global":
-                synth_prompt = (
-                    f"Analyze public OSINT findings for primary target '{target_name}'.\n"
-                    f"Known clues: DOB={parsed['birth_date'] or parsed['birth_year']}, "
-                    f"organizations={parsed['organizations']}, locations={parsed['locations']}, "
-                    f"related_people=[{rel_desc or 'none'}], "
-                    f"IDs={[s['student_id'] for s in anchors.get('student_ids', [])]}.\n"
-                    f"Collected public sources:\n{src_digest}\n\n"
-                    "CRITICAL RULE: Never confuse biographical attributes (birth year, title, employer) of a related person "
-                    "(parent/spouse/sibling) with those of the primary target.\n"
-                    "Summarize concisely in English with clean Markdown headings: "
-                    "(1) Most authoritative sources and verified facts, "
-                    "(2) Current entity resolution & uncertainty assessment (no fabrication), "
-                    "(3) Recommended next public OSINT pivots."
-                )
-            else:
-                synth_prompt = (
-                    f"Phân tích kết quả OSINT công khai cho mục tiêu chính '{target_name}'.\n"
-                    f"Manh mối đã biết: ngày/năm sinh={parsed['birth_date'] or parsed['birth_year']}, "
-                    f"tổ chức={parsed['organizations']}, địa điểm={parsed['locations']}, "
-                    f"người liên quan=[{rel_desc or 'không có'}], "
-                    f"MSSV={[s['student_id'] for s in anchors.get('student_ids', [])]}.\n"
-                    f"Các nguồn vừa thu thập được:\n{src_digest}\n\n"
-                    "QUY TẮC BẮT BUỘC: Nếu người dùng hỏi quan hệ gia đình (ví dụ A là con của ông B), TUYỆT ĐỐI không gán nhầm "
-                    "năm sinh hay chức vụ của người liên quan (ông B) thành năm sinh/chức vụ của mục tiêu chính (A); hãy phân biệt rõ hai thực thể.\n"
-                    "Hãy tổng hợp ngắn gọn bằng tiếng Việt: (1) Nguồn nào đáng giá nhất và chứa thông tin gì, "
-                    "(2) Nhận định khoanh vùng hiện tại (nêu rõ độ bất định, không bịa đặt), (3) Gợi ý bước tra cứu tiếp theo."
-                )
-            for sm in [synth_model, "gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-3.6-flash"]:
+        else:
+            synth_prompt = (
+                f"Phân tích kết quả OSINT công khai cho mục tiêu chính '{target_name}'.\n"
+                f"Manh mối đã biết: ngày/năm sinh={parsed['birth_date'] or parsed['birth_year']}, "
+                f"tổ chức={parsed['organizations']}, địa điểm={parsed['locations']}, "
+                f"người liên quan=[{rel_desc or 'không có'}], "
+                f"MSSV={[s['student_id'] for s in anchors.get('student_ids', [])]}.{tree_summary}{dossier_section}\n"
+                f"Các nguồn vừa thu thập được:\n{src_digest}\n\n"
+                "QUY TẮC BẮT BUỘC: Luôn tôn trọng các sự kiện đã xác nhận trong Hồ sơ (Ground Truth) và không bịa đặt hay gán nhầm thông tin của người trùng tên / người liên quan sang mục tiêu chính.\n"
+                "Hãy tổng hợp ngắn gọn bằng tiếng Việt: (1) Nguồn nào đáng giá nhất và chứa thông tin gì, "
+                "(2) Nhận định khoanh vùng hiện tại (nêu rõ độ bất định, nhánh nào xác nhận/nhánh nào đã quay lui, không bịa đặt), (3) Gợi ý bước tra cứu tiếp theo."
+            )
+
+        # Rotate across ALL configured Gemini keys on 401/403/429/connection failure (up to 8 keys)
+        active_synth_keys = [k for k in int_store.list_keys("gemini") if k.get("enabled")]
+        max_synth_attempts = max(1, min(len(active_synth_keys), 8))
+        tried_synth_ids: set[str] = set()
+        for k_attempt in range(max_synth_attempts):
+            synth_key_obj = int_store.acquire_key("gemini")
+            if synth_key_obj and synth_key_obj["id"] in tried_synth_ids:
+                break
+            if synth_key_obj:
+                tried_synth_ids.add(synth_key_obj["id"])
+            synth_key = synth_key_obj["api_key"] if synth_key_obj else (settings.gemini_api_key if k_attempt == 0 else "")
+            synth_key_label = synth_key_obj["name"] if synth_key_obj else "env:STALKER_GEMINI_API_KEY"
+            synth_model = model_override or (
+                synth_key_obj["model"] if (synth_key_obj and synth_key_obj.get("model")) else settings.gemini_model
+            )
+            if not synth_key:
+                break
+
+            rotate_synth_key = False
+            for sm in [
+                synth_model,
+                "gemini-4-hydrogen",
+                "gemini-3.8-flash",
+                "gemini-3.6-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+            ]:
                 try:
                     google_ai_summary = await GeminiProvider(synth_key, sm).generate(synth_prompt)
                     if google_ai_summary:
-                        bb.log("ReaderAgent", "GEMINI_SYNTHESIS", f"Tổng hợp kết quả bằng {sm} (không tốn quota Google Search)")
+                        bb.log(
+                            "ReaderAgent",
+                            "GEMINI_SYNTHESIS",
+                            f"Tổng hợp kết quả bằng Key [{synth_key_label}] ({sm}) (không tốn quota Google Search)",
+                        )
                         google_ai_error = ""
                         break
                 except httpx.HTTPStatusError as exc:
-                    if synth_key_obj and exc.response.status_code == 429:
-                        int_store.report_key_error(synth_key_obj["id"], is_rate_limit=True)
-                    continue
+                    code = exc.response.status_code
+                    if code in (400, 404, 503):
+                        continue
+                    if synth_key_obj:
+                        int_store.report_key_error(synth_key_obj["id"], is_rate_limit=(code == 429))
+                    bb.log(
+                        "ReaderAgent",
+                        "SYNTHESIS_KEY_ROTATION",
+                        f"Key [{synth_key_label}] lỗi HTTP {code} -> Xoay sang key Gemini kế tiếp.",
+                    )
+                    rotate_synth_key = True
+                    break
                 except Exception:
-                    continue
+                    if synth_key_obj:
+                        int_store.report_key_error(synth_key_obj["id"], is_rate_limit=False)
+                    rotate_synth_key = True
+                    break
+            if google_ai_summary or not rotate_synth_key:
+                break
 
     # Build clean human-readable executive report
     readable_claims = [
@@ -174,16 +229,27 @@ async def run_layer5_synthesis(
         seen_kv: set[str] = set()
         clean_items: list[str] = []
         for c in readable_claims:
-            item_str = f"{c.key}: {c.value}"
+            val_str = str(c.value or "").strip()
+            if not val_str or any(ch in val_str for ch in ("#", "[", "]", "*")) or len(val_str) > 65:
+                continue
+            if c.key == "school_or_org" and re.match(
+                r"^(?:đang\s+học|từng\s+học|học\s+sinh|sinh\s+viên|cựu\s+học\s+sinh)\b",
+                val_str,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            item_str = f"{c.key}: {val_str}"
             if item_str not in seen_kv:
                 seen_kv.add(item_str)
                 clean_items.append(item_str)
-        lines.append(f"**Hồ sơ đặc trưng đã khóa ({len(clean_items)}):** " + " · ".join(clean_items[:8]))
+        if clean_items:
+            lines.append(f"**Hồ sơ đặc trưng đã khóa ({len(clean_items)}):** " + " · ".join(clean_items[:8]))
 
     pipeline_telemetry = {
         "architecture": "5-layer-concentric-osint",
         "gatekeeper": bundle.gatekeeper_stats.to_dict(),
         "layer_timings_ms": layer_timings_ms or {},
+        "investigation_tree": bundle.investigation_tree or {},
     }
 
     response_payload = {

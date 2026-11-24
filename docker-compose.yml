@@ -27,3 +27,4 @@ services:
       - ./plugins:/app/plugins:ro
     environment:
       - STALKER_DB_PATH=data/stalker_pp.db
+      - STALKER_SEARXNG_URL=http://searxng:8080
