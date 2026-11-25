@@ -1,6 +1,8 @@
 # DUPIN MASTER PLAN — Bí kíp Kiến trúc & Lộ trình Nâng cấp
 
 > **Vai trò tài liệu**: Đây là **kim chỉ nam thiết kế & kế hoạch triển khai** cho giai đoạn tiến hóa tiếp theo của **Dupin**. Tài liệu này tách biệt hoàn toàn với `README.md`, tổng hợp nguyên lý cốt lõi của hệ thống điều tra OSINT theo tư duy tối ưu hóa tập ứng viên, kết hợp kết quả thẩm định kiến trúc khách quan và lộ trình thực thi theo từng giai đoạn có kiểm chứng.
+>
+> **Mục tiêu cuối cùng (North Star)**: Đưa Dupin tiến hóa từ pipeline chạy luật cứng 1 chiều (v2) lên **Agentic OSINT** — sử dụng **LLM để tự suy luận chiến thuật và điều khiển việc tìm kiếm thông tin thông qua một Harness Model chặt chẽ (Model-Agnostic)**: chạy mượt với mọi model phổ thông trên Ollama cục bộ (8GB VRAM), cắm trực tiếp qua MCP cho các AI Agent lớn, hỗ trợ Cloud API + `gemini-decision-1` tùy chọn, và vẫn giữ được đường Zero-Key. Tuyệt đối **không hardcode** danh sách tên miền hay mẹo cấp học vào tầng công cụ; mọi kết quả đều đi qua **L2 Deterministic Shield + Persistent Cache + Critic Grounding**.
 
 ---
 
@@ -107,15 +109,16 @@ Khi đầu vào chỉ có tên chưa đầy đủ (2 từ), hệ thống không 
     - Khóa chính: `url_hash` (SHA-256 của URL đã chuẩn hóa) + `content_sha256` (hash nội dung file/ảnh).
     - Các cột: `doc_type` (`html_table` | `pdf` | `xlsx` | `vision_ocr`), `extracted_text`, `metadata_json`, `etag`, `created_at`, `expires_at` (TTL mặc định 30 ngày cho danh sách lịch sử, 7 ngày cho trang động).
   - Tích hợp trong `backend/app/connectors/document_reader.py`: kiểm tra cache trước khi parse PDF/XLSX hoặc gọi Vision OCR; chỉ ghi cache khi trích xuất thành công (không cache lỗi 429/timeout).
+  - **Local Evidence Snapshot Viewer**: Tận dụng ngay dữ liệu trong `document_parse_cache` để khi người dùng bấm nút `Trích dẫn` trên UI, hiển thị luôn **±10 dòng ngữ cảnh xung quanh dòng khớp** (kèm link Wayback dự phòng nếu có) — giúp tự kiểm chứng bằng tay kể cả khi trang gốc trả lỗi `503 / 403`.
   - Thêm nút/API dọn cache khi cần trong Settings.
-- **Tiêu chí hoàn tất**: Chạy lặp lại cùng 1 URL ảnh/PDF cho thấy 0 lần gọi Vision API ở lần 2; toàn bộ 85+ pytest pass.
+- **Tiêu chí hoàn tất**: Chạy lặp lại cùng 1 URL ảnh/PDF cho thấy 0 lần gọi Vision API ở lần 2; người dùng xem được đoạn trích ngữ cảnh cục bộ ngay khi web gốc bị 503; toàn bộ 85+ pytest pass.
 
 ---
 
 ### Giai đoạn 2: Frozen-Snapshot Evaluation Harness (Ưu tiên #2 — Bảo hiểm chống Regression & Overfitting)
 - **Mục tiêu**: Mọi chỉnh sửa ở L1/L2/L3/L4 về sau đều có **số liệu đo lường khách quan**, chấm dứt tình trạng sửa ca mới làm rớt ca cũ.
 - **Thiết kế kỹ thuật**:
-  - Xây dựng bộ **Record-and-Replay** đặt tại `backend/tests/eval_harness/` (dữ liệu thật nếu có chỉ lưu cục bộ trong `.gitignore`, các ca commit lên Git sử dụng **dữ liệu tổng hợp/ẩn danh 100%**).
+  - Xây dựng bộ **Record-and-Replay** đặt tại `backend/tests/eval_harness/` (dữ liệu thực tế cục bộ sử dụng `backend/data/train.json` / `train.csv` — 20 ca, 79 link xác nhận, được `.gitignore` bảo vệ tuyệt đối; các ca commit lên Git sử dụng **dữ liệu tổng hợp/ẩn danh 100%**).
   - Tập Golden Dataset tối thiểu **30–50 ca chuẩn hóa**, phủ đủ 5 nhóm:
     1. Đồng âm nặng (trùng tên, khác năm sinh, dư chữ tên/biệt danh, mã ngành 7 số).
     2. Bảng HTML tách cột / PDF / Excel / OCR ảnh danh sách.
@@ -140,28 +143,39 @@ Khi đầu vào chỉ có tên chưa đầy đủ (2 từ), hệ thống không 
 
 ---
 
-### Giai đoạn 4: Selectivity-First Playbook Router & Conditional Clue Escalation (Triển khai Bí kíp Phần I)
-- **Mục tiêu**: Hiện thực hóa toàn bộ **4 nguyên lý ở Phần I** thành bộ lập kế hoạch truy vấn tổng quát, có đo đạc trước/sau bằng Evaluation Harness ở Giai đoạn 2.
+### Giai đoạn 4: Model-Agnostic Agentic OSINT Harness & Atomic Detective Tools (Đột phá Cốt lõi)
+- **Mục tiêu**: Biến Dupin thành hệ thống **Agentic OSINT** thực thụ — LLM đóng vai bộ não điều tra viên tự suy luận chiến thuật theo **4 nguyên lý ở Phần I** thông qua một **Harness chặt chẽ**, gọi bộ công cụ nguyên tử tổng quát (không hardcode tên miền hay cấp học) và luôn được bọc bởi **L2 Deterministic Shield + Cache**.
 - **Thiết kế kỹ thuật**:
-  1. **Clue Selectivity Classifier (`backend/app/pipeline/query_planner.py`)**: Phân loại mỗi mảnh input vào Bậc 0 / Bậc 1 / Bậc 2; nhận diện cấu trúc tên 2 chữ (Dạng A *Họ+Tên* vs. Dạng B *Đệm+Tên* vs. Dạng C *1 chữ*).
-  2. **Disjoint-Context Partitioner**: Gom các thuộc tính cùng ngữ cảnh (Tổ chức + Khung thời gian) và tách riêng các tổ chức khác giai đoạn thành các nhánh độc lập.
-  3. **Container-First Playbook Execution**: Ưu tiên lấy vật chứa Bậc 1 trước khi có tên rút gọn + tổ chức, áp bộ lọc khớp mờ có cấu trúc (Dạng A kẹp đầu-đuôi / Dạng B khớp đuôi + rẽ nhánh song song).
-  4. **Conditional 2-Hop Escalation Loop**:
-     - Sau Hop 1, chạy bộ đánh giá **Escalation Gate**: kiểm tra xem có mở khóa được mỏ neo Bậc 0 mới độ tin cậy cao (và không có tranh chấp đa ứng viên chưa chốt) hay không.
-     - Nếu đạt -> cập nhật `InvestigationContext` tạm thời cho Hop 2 và chạy bắc cầu sang các nhánh ngữ cảnh còn thiếu (sử dụng chung Persistent Cache từ Giai đoạn 1).
-     - Nếu có $\ge 2$ ứng viên mơ hồ -> dừng leo thang và phát thẻ **Co-Steer** để người dùng chọn đúng nhánh.
-  5. **Tối ưu hóa Hệ sinh thái Sherlock / Maigret v2 & SpiderFoot Event Bus (khắc phục điểm yếu hiện tại)**:
-     - **Auto-Trigger ở Hop 2**: Thay vì chỉ chạy khi người dùng tự gõ `@handle`, tự động trích xuất handle/local-part/social slug mới phát hiện từ Hop 1 (ví dụ từ email cá nhân, GitHub, PDF, link mạng xã hội) để kích hoạt Sherlock/Maigret v2 có chọn lọc.
-     - **Chống False Positive cho Username trùng lặp**: Đối chiếu chéo tên hiển thị / bio / tổ chức / địa điểm trên hồ sơ tìm được qua L2 Gatekeeper thay vì chỉ dựa vào HTTP 200; nâng cấp bộ nhận diện Soft-404 & cache kết quả probe ngắn hạn để tránh bị nền tảng chặn bot.
-     - **Phân biệt Hạ tầng Tổ chức vs. Dấu vết Cá nhân trong SpiderFoot Event Bus**: Khi email thuộc domain trường học/doanh nghiệp lớn (như `@<student_domain>`), không lãng phí tài nguyên quét lại hạ tầng tổ chức nhiều lần mà ưu tiên các plugin mang lại dấu vết cá nhân thực sự (Gravatar MD5, GitHub commits/repos, ORCID/OpenAlex, bio cross-links, Wayback profile).
+  1. **Tách Bộ Công cụ Nguyên tử Tổng quát (`Atomic Detective Tools`, dùng chung Web UI & MCP)**:
+     - `search_web`: Tìm kiếm đa nguồn (Serper / `SearXNG || ddgs`) đi qua L2 Gatekeeper.
+     - `scan_portal_3format`: Quét trang danh sách 3 định dạng (HTML table / PDF-XLSX / Vision OCR).
+     - `read_doc_cached`: Bộ đọc tài liệu công khai tổng quát (HTML/PDF/Excel/Preview) — không hardcode tên trang, tự động lưu **Local Evidence Snapshot** chống 503.
+     - `search_wayback_cdx`: Tra cứu kho lưu trữ lịch sử tổng quát để Agent tự gọi khi gặp link chết hoặc giai đoạn quá khứ bị xóa.
+     - `scan_username_maigret`, `decode_anchors`, `verify_and_save_claim`: Vũ khí recon & ghi đồ thị có kiểm chứng.
+  2. **4 Chế độ Chạy Linh hoạt cho Cộng đồng GitHub (Model-Agnostic)**:
+     - **Zero-Key**: Đường Deterministic Pipeline + SearXNG/ddgs (không cần GPU, không cần API key).
+     - **MCP Agentic**: AI Agent lớn (Antigravity, Claude Code, Cursor, Codex) trực tiếp cầm bộ Atomic Tools của Dupin — **0 tốn quota API bên trong Dupin**.
+     - **Local Agentic Harness (Ollama 4B–7B trên 8GB VRAM)**: Vòng lặp `Think → Call Tool → Observe → Decide` (tối đa 4–6 bước), ép **Structured JSON Output** (`thought`, `missing_clue`, `tool`, `args`, `stop`) + **Working Memory nén gọn qua L2 Shield** — **0 rate limit 429, 100% riêng tư**.
+     - **Cloud Accelerated (tùy chọn)**: Gemini Flash / OpenAI + tùy chọn **`gemini-decision-1`** (150–250 ms, 0 output token, xác suất hiệu chuẩn `0.01..0.99`) làm trọng tài chấm vùng xám L2.5, sàng lọc ảnh trước khi gọi Vision OCR (Multimodal Triage), và chấm ngưỡng cổng Leo thang *(tự động tắt khi bật `Strict Local-Only`)*.
+  3. **Tư duy Chiến thuật trong Harness (thay vì `if/else` cứng)**:
+     - Nhúng **Selectivity-First (Bậc 0/1/2)**, **Disjoint-Context Partitioning**, và **Structured Partial-Name Matching (Dạng A/B/C)** vào Harness.
+     - **Nguyên tắc xử lý dữ liệu quá khứ tổng quát**: Khi giai đoạn $T$ không có dấu vết trực tiếp, Agent tự cân nhắc tra cứu `search_wayback_cdx` hoặc tìm ở giai đoạn kế tiếp $T+1$ nơi thường ghi lại xuất xứ của $T$ (tuyển sinh, CV, tiểu sử, bổ nhiệm...); nếu vẫn không có dấu vết số hóa thì dừng sớm và báo trung thực.
+     - **Hàng rào chống Silent Drift**: Với tên rút gọn 2 chữ, chỉ tự leo thang Hop tiếp theo khi khớp thêm ràng buộc xác nhận (như năm sinh/ngày sinh), gắn nhãn giả thuyết kèm nút quay lui 1-click; nếu có $\ge 2$ ứng viên mơ hồ -> dừng và phát thẻ **Co-Steer**.
+  4. **Tối ưu hóa Hệ sinh thái Sherlock / Maigret v2 & SpiderFoot Event Bus**:
+     - **Auto-Trigger ở bước tiếp theo**: Tự động trích xuất handle/local-part/social slug mới phát hiện từ bước trước để kích hoạt Sherlock/Maigret v2 có chọn lọc.
+     - **Chống False Positive**: Đối chiếu chéo tên hiển thị / bio / tổ chức trên hồ sơ tìm được qua L2 Gatekeeper + cache probe ngắn hạn chống chặn bot.
+     - **Phân biệt Hạ tầng Tổ chức vs. Dấu vết Cá nhân trong SpiderFoot Event Bus**: Không quét lặp hạ tầng domain trường học/doanh nghiệp lớn; ưu tiên dấu vết cá nhân (Gravatar MD5, GitHub repos/commits, ORCID/OpenAlex, bio cross-links, Wayback profile).
+  5. **Trajectory Logger (chạy nền)**: Tự động ghi lại vết suy luận thành công (`Input → Thought → Tool → Observation → Verified Outcome`, đã ẩn danh hóa) phục vụ đánh giá và tùy chọn chưng cất model ở Giai đoạn 5.
 - **Tiêu chí hoàn tất**:
-  - Evaluation Harness (Giai đoạn 2) ghi nhận **Recall@K tăng rõ rệt** trên nhóm ca tên rút gọn & đa giai đoạn, trong khi **Precision@K và False-Rejection Rate không suy giảm** so với baseline `v2.0-stable-backup`.
+  - Evaluation Harness (Giai đoạn 2) ghi nhận **Recall@K tăng rõ rệt** trên nhóm ca tên rút gọn, đa giai đoạn & dữ liệu cũ, trong khi **Precision@K và False-Rejection Rate không suy giảm** so với baseline `v2.0-stable-backup`.
+  - Chạy trọn vẹn vòng lặp Agentic Harness trên Ollama 4B–7B cục bộ (8GB VRAM) không dính lỗi JSON/rate limit.
 
 ---
 
-### Giai đoạn 5 (Tùy chọn mở rộng về sau)
-- **L2.5 Optional Local Reranker**: Chỉ bật khi người dùng mở rộng sang domain doanh nghiệp/báo chí đa ngôn ngữ, chạy trên vùng xám (`score 1..3`) và phải chứng minh vượt baseline trên Evaluation Harness.
-- **Online Canary Suite**: 10–15 ca public ground-truth chạy định kỳ hàng tuần để phát hiện sớm khi Serper, SearXNG hoặc cấu trúc DOM cổng thông tin thay đổi.
+### Giai đoạn 5 (Tùy chọn mở rộng về sau — không bắt buộc cho người dùng GitHub)
+- **QLoRA Trajectory Distillation (`dupin-detective-4b-GGUF`)**: Khi gom đủ 100–300 vết suy luận sạch từ Trajectory Logger, fine-tune QLoRA 4-bit (Unsloth trên Google Colab miễn phí) lên nền model 4B và phát hành tùy chọn trên HuggingFace (`ollama run hf.co/...`) như một preset tối ưu riêng.
+- **L2.5 Optional Local Reranker**: Chỉ bật khi mở rộng mạnh sang domain doanh nghiệp/báo chí đa ngôn ngữ và chứng minh vượt baseline trên Evaluation Harness.
+- **Online Canary Suite**: 10–15 ca public ground-truth chạy định kỳ hàng tuần để phát hiện sớm khi Serper, SearXNG hoặc cấu trúc DOM thay đổi.
 
 ---
 
