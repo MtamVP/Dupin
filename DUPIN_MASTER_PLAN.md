@@ -87,6 +87,7 @@ Khi đầu vào chỉ có tên chưa đầy đủ (2 từ), hệ thống không 
 ### 1. Những tài sản cốt lõi PHẢI GIỮ VỮNG
 - **Layer 2 Deterministic Gatekeeper**: Giữ vai trò phủ quyết cứng cho mọi bất biến toán học & cấu trúc (`user_rejected_source`, `junk_url`, `negative_keyword`, `temporal_seniority_veto`, `temporal_grade_age_veto`, `dob_mismatch_veto`, `suffix_name_mismatch`, `is_vn_major_code`, `Strong-Match Retention`). Tuyệt đối không giao các luật cứng này cho LLM.
 - **3-Format Roster Scanner**: Bảng HTML tách cột + PDF/XLSX (120 trang) + Vision OCR ảnh danh sách.
+- **Hệ sinh thái OSINT tích hợp (Sherlock / Maigret v2, SpiderFoot Event Bus, Passive Recon, PhoneInfoga)**: Giữ trọn vẹn toàn bộ 55+ nền tảng username recon, 11 plugins sự kiện, Gravatar/OpenPGP/RDAP/crt.sh/OpenAlex/ORCID/GitHub — **không cắt bỏ**, mà tối ưu hóa cơ chế kích hoạt và lọc nhiễu ở Giai đoạn 4.
 - **Layer 4 Core Trust**: 8D Entity Resolution (Log-Odds Bayes + giảm chấn buồng vang $1/\sqrt{k}$ + Negative Veto) và Critic Verbatim Quote Grounding.
 - **Local-First & Zero-Key Resilience**: Chạy mượt cả khi không có API key thương mại (SearXNG + ddgs + Ollama).
 
@@ -149,6 +150,10 @@ Khi đầu vào chỉ có tên chưa đầy đủ (2 từ), hệ thống không 
      - Sau Hop 1, chạy bộ đánh giá **Escalation Gate**: kiểm tra xem có mở khóa được mỏ neo Bậc 0 mới độ tin cậy cao (và không có tranh chấp đa ứng viên chưa chốt) hay không.
      - Nếu đạt -> cập nhật `InvestigationContext` tạm thời cho Hop 2 và chạy bắc cầu sang các nhánh ngữ cảnh còn thiếu (sử dụng chung Persistent Cache từ Giai đoạn 1).
      - Nếu có $\ge 2$ ứng viên mơ hồ -> dừng leo thang và phát thẻ **Co-Steer** để người dùng chọn đúng nhánh.
+  5. **Tối ưu hóa Hệ sinh thái Sherlock / Maigret v2 & SpiderFoot Event Bus (khắc phục điểm yếu hiện tại)**:
+     - **Auto-Trigger ở Hop 2**: Thay vì chỉ chạy khi người dùng tự gõ `@handle`, tự động trích xuất handle/local-part/social slug mới phát hiện từ Hop 1 (ví dụ từ email cá nhân, GitHub, PDF, link mạng xã hội) để kích hoạt Sherlock/Maigret v2 có chọn lọc.
+     - **Chống False Positive cho Username trùng lặp**: Đối chiếu chéo tên hiển thị / bio / tổ chức / địa điểm trên hồ sơ tìm được qua L2 Gatekeeper thay vì chỉ dựa vào HTTP 200; nâng cấp bộ nhận diện Soft-404 & cache kết quả probe ngắn hạn để tránh bị nền tảng chặn bot.
+     - **Phân biệt Hạ tầng Tổ chức vs. Dấu vết Cá nhân trong SpiderFoot Event Bus**: Khi email thuộc domain trường học/doanh nghiệp lớn (như `@<student_domain>`), không lãng phí tài nguyên quét lại hạ tầng tổ chức nhiều lần mà ưu tiên các plugin mang lại dấu vết cá nhân thực sự (Gravatar MD5, GitHub commits/repos, ORCID/OpenAlex, bio cross-links, Wayback profile).
 - **Tiêu chí hoàn tất**:
   - Evaluation Harness (Giai đoạn 2) ghi nhận **Recall@K tăng rõ rệt** trên nhóm ca tên rút gọn & đa giai đoạn, trong khi **Precision@K và False-Rejection Rate không suy giảm** so với baseline `v2.0-stable-backup`.
 
